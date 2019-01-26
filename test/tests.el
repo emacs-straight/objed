@@ -1,9 +1,14 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'objed)
+
+;; TO ADD NEW TESTS CREATE A DIR IN TESTS AND ADD TESTS FILES IN IT.
+
+(declare-function objed--exit-objed "objed")
 ;; activate on load
 (objed-mode 1)
 
+;;* Simulate interactions
 ;; defuns adapted from  lispy-test.el
 
 (defun objed--call-object-interactively (o &optional cmd)
@@ -75,398 +80,137 @@ Insert KEY if there's no command."
 ;;   (should (equal (objed-decode-keysequence "3\C-?")
 ;;                  '(3 ""))))
 
-(defmacro objed-with (in body &optional object)
-  (let ((init (if object `(objed--init ',object)
-                '(objed--init 'char))))
-  `(let ((temp-buffer (generate-new-buffer " *temp*")))
-     (save-window-excursion
-       (unwind-protect
-           (progn
-             (switch-to-buffer temp-buffer)
-             (emacs-lisp-mode)
-             (transient-mark-mode 1)
-             (insert ,in)
-             (goto-char (point-min))
-             (when (search-forward "~" nil t)
-               (backward-delete-char 1)
-               (set-mark (point)))
-             (goto-char (point-max))
-             (search-backward "|")
-             (delete-char 1)
-             ,init
-             (setq current-prefix-arg nil)
-             ;; execute command
-             ,@(mapcar (lambda (x)
-                         (cond ((equal x '(kbd "C-u"))
-                                `(setq current-prefix-arg (list 4)))
-                               ((or (stringp x)
-                                    (and (listp x)
-                                         (eq (car x) 'kbd)))
-                                `(objed-unalias ,x))
-                               (t x)))
-                       (list body))
-             (let ((npos (point-marker)))
-               (when objed--current-obj
-                 (goto-char (objed--end))
-                 (insert ">")
-                 (goto-char (objed--beg))
-                 (insert "<"))
-               (goto-char npos)
-               (skip-chars-backward "<" (1- (point)))
-               (skip-chars-forward ">" (1+ (point)))
-               (insert "|")
-               (when (region-active-p)
-                 (exchange-point-and-mark)
-                 (insert "~")))
-             (buffer-substring-no-properties
-              (point-min)
-              (point-max)))
-         (objed--exit-objed)
-         ;; reset for next test
-         (setq last-command nil)
-         (setq objed--last-states nil)
-         (and (buffer-name temp-buffer)
-              (kill-buffer temp-buffer)))))))
+(defmacro objed-with (in body &optional mode)
+  (let ((init '(objed--init 'char))
+        (body (if (stringp body) `(kbd ,body) body)))
+    `(let ((temp-buffer (generate-new-buffer " *temp*")))
+       (save-window-excursion
+         (unwind-protect
+             (progn
+               (switch-to-buffer temp-buffer)
+               (or (and ',mode (funcall ',mode))
+                   (emacs-lisp-mode))
+               (transient-mark-mode 1)
+               (insert ,in)
+               (goto-char (point-min))
+               (when (search-forward "~" nil t)
+                 (backward-delete-char 1)
+                 (set-mark (point)))
+               (goto-char (point-max))
+               (search-backward "|")
+               (delete-char 1)
+               ,init
+               (setq current-prefix-arg nil)
+               ;; execute command
+               ,@(mapcar (lambda (x)
+                           (cond ((equal x '(kbd "C-u"))
+                                  `(setq current-prefix-arg (list 4)))
+                                 ((or (stringp x)
+                                      (and (listp x)
+                                           (eq (car x) 'kbd)))
+                                  `(objed-unalias ,x))
+                                 (t x)))
+                         (list body))
+               (let ((npos (point-marker)))
+                 (when objed--current-obj
+                   (goto-char (objed--end))
+                   (insert ">")
+                   (goto-char (objed--beg))
+                   (insert "<"))
+                 (goto-char npos)
+                 (skip-chars-backward "<" (1- (point)))
+                 (skip-chars-forward ">" (1+ (point)))
+                 (insert "|")
+                 (when (region-active-p)
+                   (exchange-point-and-mark)
+                   (insert "~")))
+               (buffer-substring-no-properties
+                (point-min)
+                (point-max)))
+           (objed--exit-objed)
+           ;; reset for next test
+           (setq last-command nil)
+           (setq objed--last-states nil)
+           (and (buffer-name temp-buffer)
+                (kill-buffer temp-buffer)))))))
 
-;; needs to come first initializes, for tests, too
-(ert-deftest objed-activate ()
-  (should (string= (objed-with "Testing line he|re" "\C-a")
-                   "|<Testing line here>"))
-  (should (string= (objed-with "Testing line he|re" (kbd "M-b"))
-                   "Testing line |<here>"))
-  (should (string= (objed-with "Testing line he|re" (kbd "M-f"))
-                   "Testing line <here>|"))
-  (should (string= (objed-with "Testing line he|re\nFollowing line here" "\C-n")
-                   "Testing line here\n<Following line |here>"))
-  (should (string= (objed-with "Testing line he|re" (objed--call-object-interactively 'line))
-                   "|<Testing line here>"))
-  (should (string= (objed-with "
-(defun objed--save-start-position (&rest _)
-  \"Save position of| point via `objed--opoint'.\"
-  (setq objed--opoint (point)))
-"  (kbd "C-M-a"))
-  "<
-|(defun objed--save-start-position (&rest _)
-  \"Save position of point via `objed--opoint'.\"
-  (setq objed--opoint (point)))
->")))
-
-
-(ert-deftest objed-basic-movement ()
-  (should (string= (objed-with "Testing line he|re" "rr")
-                   "Testing |<line> here"))
-  (should (string= (objed-with "Testing line he|re" "2r")
-                   "Testing |<line> here"))
-  (should (string= (objed-with "Tes|ting line here" "ss")
-                   "Testing <line>| here"))
-  (should (string= (objed-with "Tes|ting line here" "2s")
-                   "Testing <line>| here"))
-  (should (string= (objed-with "Tes|ting line" "bb")
-                   "T|<e>sting line"))
-  (should (string= (objed-with "Tes|ting line" "2b")
-                   "T|<e>sting line"))
-  (should (string= (objed-with "Tes|ting line" "fff")
-                   "Testin|<g> line"))
-  (should (string= (objed-with "Tes|ting line" "3f")
-                   "Testin|<g> line"))
-  (should (string= (objed-with ";; this is the previous line\n;; this is| the current line" "p")
-                   "<;; this is| the previous line\n>;; this is the current line"))
-  (should (string= (objed-with ";; this is a| test\n;; this is the next line" "n")
-                   ";; this is a test\n<;; this is t|he next line>"))
-  (should (string= (objed-with "Testing |line here\nFollowing line here" "npsrfb")
-                   "Testing |<l>ine here\nFollowing line here"))
-  (should (string= (objed-with "Testing |line here\nFollowing line here" "e")
-                   "Testing <line here>|\nFollowing line here"))
-  (should (string= (objed-with "Testing |line here\nFollowing line here" "a")
-                   "|<Testing >line here\nFollowing line here"))
-  (should (string= (objed-with "Testing |line here\nFollowing line here" "ae")
-                   "<Testing line here>|\nFollowing line here")))
-
-(ert-deftest objed-pop-state ()
-  (should (string= (objed-with "Testing line he|re" "rr")
-                   (objed-with "Testing line he|re" "rrr,")))
-  (should (string= (objed-with "Testing |line here\nFollowing line here" "n")
-                   (objed-with "Testing |line here\nFollowing line here" "npsfsb,,,,,"))))
+;;* Test creation
+(eval-and-compile
+  (defun objed-parse-test (file)
+    (let ((parsed nil))
+      (with-temp-buffer
+        (insert-file-contents file)
+        (delete-trailing-whitespace)
+        (goto-char (point-min))
+        (push (buffer-substring (line-beginning-position) (line-end-position))
+              parsed)
+        (search-forward ";;;;" nil t)
+        (forward-line 1)
+        (push (buffer-substring (point) (progn (search-forward ";;;;" nil t)
+                                               (forward-char -4)
+                                               (point)))
+              parsed)
+        (search-forward ";;;;" nil t)
+        (forward-line 1)
+        (push (buffer-substring (point)
+                                (point-max))
+              parsed))
+      (nreverse parsed))))
 
 
-
-(ert-deftest objed-choose-and-navigate-defun ()
-  (should (string= (objed-with "
-\(defun objed--save-start-position (&rest _)
-  \"Save position of point via `objed--opoint'.\"
-  (setq objed--opoint (point)))
-
-\(defun objed--goto-start (&optional _)
-  \"Goto start |of current object if there is one.\"
-  (when objed--current-obj
-    (goto-char (objed--beg))))
-
-\(defun objed--object-trailing-line (pos)
-  \"Activate trailing part from POS.\"
-  (unless (eq objed--obj-state 'inner)
-    (objed--reverse))
-  (objed--change-to :beg pos :ibeg pos))"
-        "cdthh")
-"
-\(defun objed--save-start-position (&rest _)
-  \"Save position of point via `objed--opoint'.\"
-  (setq objed--opoint (point)))
-
-\(defun objed--goto-start (&optional _)
-  \"Goto start of current object if there is one.\"
-  (when objed--current-obj
-    (goto-char (objed--beg))))
-<
-|(defun objed--object-trailing-line (pos)
-  \"Activate trailing part from POS.\"
-  (unless (eq objed--obj-state 'inner)
-    (objed--reverse))
-  (objed--change-to :beg pos :ibeg pos))>")))
-
-(ert-deftest objed-beg-of-block-expansion ()
-
-  (let ((string "
-\(defun check ()
-  (ignore))
-
-;; More on same level
-
-;; Some text
-;; and |more text"))
-    (should (string= (objed-with string "a")
-                     "
-\(defun check ()
-  (ignore))
-
-;; More on same level
-
-;; Some text
-|<;; and >more text"))
-    (should (string= (objed-with string "aa")
-                     "
-\(defun check ()
-  (ignore))
-
-;; More on same level
-
-|<;; Some text
-;; and >more text"))
-    (should (string= (objed-with string "aaa")
-                     "
-\(defun check ()
-  (ignore))
-
-;; More on same level
-|<
-;; Some text
-;; and >more text"))
-    (should (string= (objed-with string "aaaa")
-                     "
-\(defun check ()
-  (ignore))
-
-|<;; More on same level
-
-;; Some text
-;; and >more text"))
-     (should (string= (objed-with string "aaaaa")
-                     "|<
-\(defun check ()
-  (ignore))
-
-;; More on same level
-
-;; Some text
-;; and >more text"))))
-
-(ert-deftest objed-end-of-block-expansion ()
-  (let ((string "
-;; Some |text
-;; and more text
-;;
-;;
-
-;; Comment end
-
-\(defun check ()
-  (ignore))
-
-;; buffer end"))
-    (should (string= (objed-with string "e")
-                     "
-;; Some <text>|
-;; and more text
-;;
-;;
-
-;; Comment end
-
-\(defun check ()
-  (ignore))
-
-;; buffer end"))
-    (should (string= (objed-with string "ee")
-                     "
-;; Some <text
-;; and more text>|
-;;
-;;
-
-;; Comment end
-
-\(defun check ()
-  (ignore))
-
-;; buffer end"))
-    (should (string= (objed-with string "eee")
-                     "
-;; Some <text
-;; and more text
-;;
-;;>|
-
-;; Comment end
-
-\(defun check ()
-  (ignore))
-
-;; buffer end"))
-        (should (string= (objed-with string "eeee")
-                     "
-;; Some <text
-;; and more text
-;;
-;;
-
-;; Comment end>|
-
-\(defun check ()
-  (ignore))
-
-;; buffer end"))
-        (should (string= (objed-with string "eeeee")
-                     "
-;; Some <text
-;; and more text
-;;
-;;
-
-;; Comment end
-
-\(defun check ()>|
-  (ignore))
-
-;; buffer end"))
-        (should (string= (objed-with string "eeeeee")
-                     "
-;; Some <text
-;; and more text
-;;
-;;
-
-;; Comment end
-
-\(defun check ()
-  (ignore))
-
-;; buffer end>|"))))
+(defun objed-equal (str1 str2)
+  (let* ((str1 (replace-regexp-in-string "\\( \\|\n\\|\t\\)+\\'" "" str1))
+         (str1 (replace-regexp-in-string "\\`\\( \\|\n\\|\t\\)+" "" str1))
+         (str2 (replace-regexp-in-string "\\( \\|\n\\|\t\\)+\\'" "" str2))
+         (str2 (replace-regexp-in-string "\\`\\( \\|\n\\|\t\\)+" "" str2)))
+    (string= str1 str2)))
 
 
-(ert-deftest objed-block-expansion ()
-  (let ((string "
-\(defun check ()
-  (ignore))
+(defmacro objed-create-test (file mode)
+  (let* ((parsed (objed-parse-test file))
+         (key (nth 0 parsed))
+         (str1 (nth 1 parsed))
+         (str2 (nth 2 parsed)))
+    `(should (objed-equal (objed-with ,str1 ,key ,mode)
+                          (prog1 ,str2
+                            ;; show path of test in compile output
+                            ,file)))))
 
-;; More on same level
+(defmacro objed-create-tests-for (dir mode)
+  (let ((files (directory-files
+                (expand-file-name
+                 (format "tests/%s/%s" (symbol-name mode) dir)
+                 (file-name-directory
+                  (or load-file-name default-directory))) t "^[^.]"))
+        (body nil))
+    (push 'ert-deftest body)
+    (push (intern (format "objed-%s" dir)) body)
+    (push nil body)
+    (dolist (file files)
+      (push `(objed-create-test ,file ,mode) body))
+    (nreverse body)))
 
-;; Some text
-;; and |more text"))
-    (should (string= (objed-with string "l")
-                     "
-\(defun check ()
-  (ignore))
 
-;; More on same level
+;; (should (string= (objed-with "Testing line he|re"
+;;                              (objed--call-object-interactively 'line))
+;;                  "|<Testing line here>"))
 
-;; Some text
-|<;; and more text>"))
-    (should (string= (objed-with string "ll")
-                     "
-\(defun check ()
-  (ignore))
+(defmacro objed-create-tests (mode)
+  (let ((dirs (directory-files
+               (expand-file-name
+                (format "tests/%s" (symbol-name mode))
+                (file-name-directory
+                 (or load-file-name default-directory))) t "^[^.]"))
+        (body nil))
+    (push 'progn body)
+    (dolist (dir dirs)
+      (push `(objed-create-tests-for ,(file-name-nondirectory dir) ,mode)
+            body))
+    (nreverse body)))
 
-;; More on same level
 
-|<;; Some text
-;; and more text>"))
-    (should (string= (objed-with string "lll")
-                     "
-\(defun check ()
-  (ignore))
-
-;; More on same level
-|<
-;; Some text
-;; and more text>"))
-      (should (string= (objed-with string "llll")
-                     "
-\(defun check ()
-  (ignore))
-
-|<;; More on same level
-
-;; Some text
-;; and more text>"))
-      (should (string= (objed-with string "lllll")
-                       "|<
-\(defun check ()
-  (ignore))
-
-;; More on same level
-
-;; Some text
-;; and more text>"))
-
-))
-
-(ert-deftest objed-context-expansion ()
-  (let ((str "
-\(defun testing ()
-  (let ((a nil))
-    (message \"this is| a test\")))
-"))
-    (should (string= (objed-with str "o")
-                     "
-\(defun testing ()
-  (let ((a nil))
-    (message \"|<this is a test>\")))
-"))
-    (should (string= (objed-with str "oo")
-                     "
-\(defun testing ()
-  (let ((a nil))
-    (message |<\"this is a test\">)))
-"))
-    (should (string= (objed-with str "ooo")
-                     "
-\(defun testing ()
-  (let ((a nil))
-    |<(message \"this is a test\")>))
-"))
-    (should (string= (objed-with str "oooo")
-                     "
-\(defun testing ()
-  |<(let ((a nil))
-    (message \"this is a test\"))>)
-"))
-    (should (string= (objed-with str "ooooo")
-                     "
-|<\(defun testing ()
-  (let ((a nil))
-    (message \"this is a test\")))>
-"))))
-
-;; TODO: op tests, marking, remaining commands
+(objed-create-tests emacs-lisp-mode)
+;; TODO: op tests, marking, remaining commands, other modes
 
 
 (provide 'tests)

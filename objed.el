@@ -3,7 +3,7 @@
 
 ;; Author: Clemens Radermacher <clemera@posteo.net>
 ;; Package-Requires: ((emacs "25") (cl-lib "0.5"))
-;; Version: 0.2.0
+;; Version: 0.3.1
 ;; Keywords: convenience
 ;; URL: https://github.com/clemera/objed
 
@@ -317,7 +317,7 @@ removed."
   :type 'symbol)
 
 (defcustom objed-initial-object 'region
-  "Object to use for inititalization with `objed-activate'."
+  "Object to use as fallback for `objed-activate'."
   :group 'objed
   :type 'symbol)
 
@@ -651,7 +651,9 @@ BEFORE and AFTER are forms to execute before/after calling the command."
     (define-key map "p" (objed--call-and-switch previous-line line))
     (define-key map "n" (objed--call-and-switch
                          next-line line
-                         (when (eq last-command 'objed-extend)
+                         (when (and (bolp)
+                                    (eq last-command 'objed-extend)
+                                    (eq objed--object 'line))
                            (objed-exchange-point-and-mark)
                            (goto-char (line-beginning-position)))))
 
@@ -683,6 +685,7 @@ BEFORE and AFTER are forms to execute before/after calling the command."
 
     (define-key map "i" 'objed-del-insert)
     (define-key map ":" 'objed-toggle-state)
+    (define-key map "=" 'objed-toggle-state)
     (define-key map "j" 'objed-toggle-side)
 
     ;; marking/unmarking
@@ -716,12 +719,12 @@ BEFORE and AFTER are forms to execute before/after calling the command."
     (define-key map "$"
       (objed-define-op nil flyspell-region))
 
-    (dolist (str (split-string  "'\"([{" "" t))
+    (dolist (str (split-string  "\"([{" "" t))
       (define-key map (kbd str)
         (objed-define-op nil objed-electric)))
 
     ;; quote op
-    (define-key map "="
+    (define-key map "'"
       (objed-define-op nil objed-electric-pair))
     ;; all the usual quoting signs
     (define-key map "~" 'objed-undo)
@@ -1689,17 +1692,21 @@ Object is choosen based on context."
        (when (objed--switch-to obj)
          (goto-char (objed--beg))))))
 
-
+;;;###autoload
 (defun objed-activate (&optional obj)
   "Activate objed.
 
-Uses `objed-initial-object' for initialization.
+Uses associated `objed-cmd-alist' for `last-command' as initial
+object. Falls back to `objed-initial-object' if no match found.
 
 If called from code decide for activation with char object using
 `objed--activate'."
   (interactive)
   (if (called-interactively-p 'any)
-      (objed--init objed-initial-object)
+      (objed--init
+       (if (assq last-command objed-cmd-alist)
+           last-command
+         objed-initial-object))
     (when (objed-init-p)
       (objed--init (or obj 'char)))))
 
@@ -2950,9 +2957,8 @@ on."
                (bound-and-true-p multiple-cursors-mode)))
           (t
            (if (and text (objed--line-p text))
-               (objed--switch-to 'line)
-             (when (objed--switch-to 'char)
-               (goto-char (objed--beg))))))
+               (objed--init 'line)
+             (objed--init 'char))))
     ;; cleanup
     (when objed--extend-cookie
       (face-remap-remove-relative objed--extend-cookie)
