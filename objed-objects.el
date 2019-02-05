@@ -404,7 +404,7 @@ OBJ is the object to use and defaults to `objed--current-obj'."
   "Return non-nil if current object is a basic object.
 
 From basic objects `objed' starts expanding to context objects."
-  (memq objed--object '(line word char region buffer)))
+  (memq objed--object '(sexp line word char region buffer)))
 
 (defun objed--current (&optional obj)
   "Get the current range of interest.
@@ -1500,9 +1500,7 @@ comments."
 
 
 (defun objed--at-sexp-p ()
-  "Return non-nil if point at strutured expression.
-
-Ignores simple structured expressions like words or symbols."
+  "Return sexp object if point at strutured expression."
   (let ((opos (point))
         (real-this-command 'forward-sexp))
     (save-excursion
@@ -1515,6 +1513,8 @@ Ignores simple structured expressions like words or symbols."
                        (forward-sexp (- arg)))))))
         (let ((zigp nil))
           (when (or (and (not (eobp))
+                         (or (memq (char-syntax (char-before)) (list ?\s ?>))
+                             (not (eq (char-syntax (char-after)) ?\")))
                          (save-excursion
                            (eq (point) (progn (setq zigp (zigzag 1))
                                               (point)))))
@@ -1523,7 +1523,8 @@ Ignores simple structured expressions like words or symbols."
                            (eq (point) (progn (setq zigp (zigzag -1))
                                               (point))))))
             (and zigp
-                 (cons (point) zigp))))))))
+                 (cons (min (point) zigp)
+                       (max (point) zigp)))))))))
 
 (objed-define-object nil sexp
   :atp
@@ -1560,8 +1561,11 @@ Ignores simple structured expressions like words or symbols."
                     (cons beg (point)))))))
   :try-next
   (or (ignore-errors
-         (forward-sexp 1)
-         (forward-sexp -1) t)
+        (forward-sexp 1)
+        (forward-sexp -1) t)
+      (ignore-errors
+        (up-list 1)
+        t)
       (ignore-errors
         (forward-word 1)
         (forward-sexp -1)
@@ -2080,19 +2084,20 @@ non-nil the indentation block can contain empty lines."
          (narrow-to-region (car bounds) (cdr bounds))
          (goto-char (car bounds))
          (objed--skip-ws)
-         (cond ((looking-at "(defun")
-                (down-list 2)
-                (up-list 1)
-                (cons (point)
-                      (progn (goto-char (point-max))
-                             (down-list -1)
-                             (point))))
-               (t
-                (cons (progn (down-list 1)
-                             (point))
-                      (progn (goto-char (point-max))
-                             (down-list -1)
-                             (point))))))))))
+         (ignore-errors
+           (cond ((looking-at "(defun")
+                  (down-list 2)
+                  (up-list 1)
+                  (cons (point)
+                        (progn (goto-char (point-max))
+                               (down-list -1)
+                               (point))))
+                 (t
+                  (cons (progn (down-list 1)
+                               (point))
+                        (progn (goto-char (point-max))
+                               (down-list -1)
+                               (point)))))))))))
 
 (objed-define-object nil tag
   :atp
