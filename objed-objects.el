@@ -403,8 +403,10 @@ OBJ is the object to use and defaults to `objed--current-obj'."
 (defun objed--basic-p ()
   "Return non-nil if current object is a basic object.
 
-From basic objects `objed' starts expanding to context objects."
-  (memq objed--object '(sexp line word char region buffer)))
+From basic objects `objed' starts expanding to context objects.
+Thus this should be objects which have their own movement
+commands."
+  (memq objed--object '(sexp line identifier word char region buffer)))
 
 (defun objed--current (&optional obj)
   "Get the current range of interest.
@@ -1074,6 +1076,13 @@ object."
           (objed--goto-char (objed--beg obj)))))))
 
 
+(defun objed-goto-prev-identifier (arg)
+  (interactive "P")
+  (unless (eq objed--object 'identifier)
+    (objed--switch-to 'identifier))
+  (objed--goto-previous arg))
+
+
 (defun objed--make-object-overlay (&optional obj)
   "Create an overlay to mark current object.
 
@@ -1203,14 +1212,16 @@ position POS, otherwise just return POS."
 
 ;; * Object definition helpers
 
-(defun objed--in-string-p (&optional syn)
+(defun objed--in-string-p (&optional syn ignore-atp)
   "Return non-nil if point is inside or at string.
 
 If SYN is given use it instead of syntax at point."
   (let ((syn (or syn (syntax-ppss))))
-    (or (and (nth 3 syn)
+    (if (and (nth 3 syn)
              (nth 8 syn))
-        (objed--at-string-p))))
+        (nth 8 syn)
+      (and (not ignore-atp)
+           (objed--at-string-p)))))
 
 (defun objed--at-string-p ()
   "Return non-nil if point is at string."
@@ -1996,6 +2007,7 @@ non-nil the indentation block can contain empty lines."
   :try-prev
   (objed-prev-identifier))
 
+;;;###autoload
 (defun objed-next-identifier ()
   "Move to next identifier."
   (interactive)
@@ -2013,6 +2025,7 @@ non-nil the indentation block can contain empty lines."
                     (eq real-this-command #'objed-next-identifier))
             (run-at-time 0 nil (apply-partially #'message "Last one!"))))))))
 
+;;;###autoload
 (defun objed-prev-identifier ()
   "Move to previous identifier."
   (interactive)

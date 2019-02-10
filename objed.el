@@ -3,7 +3,7 @@
 
 ;; Author: Clemens Radermacher <clemera@posteo.net>
 ;; Package-Requires: ((emacs "25") (cl-lib "0.5"))
-;; Version: 0.5.0
+;; Version: 0.5.1
 ;; Keywords: convenience
 ;; URL: https://github.com/clemera/objed
 
@@ -513,16 +513,11 @@ update to given object."
              ;; initialize first
              (when (not objed--buffer)
                (objed--init name))
-             (cond  ((and (eq name current)
-                          objed--marked-ovs
-                          (not (region-active-p)))
-                     (objed--mark-all-inside 'buffer))
-                    ((and (eq name current)
-                          (not (region-active-p)))
-                     (or (objed--mark-all-inside 'defun)
-                         (objed--mark-all-inside 'buffer)))
-                     (t (when (objed--switch-to name)
-                          (goto-char (objed--beg))))))))))
+             ;; goto next on repeat
+             (cond  ((eq name current)
+                     (objed--goto-next))
+                    (t (when (objed--switch-to name)
+                         (goto-char (objed--beg))))))))))
 
 
 (defun objed--switch-to-object-for-cmd (cmd)
@@ -551,6 +546,7 @@ BEFORE and AFTER are forms to execute before/after calling the command."
               (symbol-name cmd) (symbol-name obj))
      (interactive)
      ,before
+     (setq this-command ',cmd)
      (call-interactively ',cmd)
      ,after
      (objed--switch-to ',obj)))
@@ -730,8 +726,21 @@ BEFORE and AFTER are forms to execute before/after calling the command."
     (define-key map "\""
       (objed-define-op nil objed-electric))
 
+    ;; direct object switches
+    (define-key map "." 'objed-identifier-object)
+    (define-key map "_" 'objed-symbol-object)
+    ;;(define-key map "%" 'objed-contents-object)
+
+
+    ;; prefix keys
+    (define-key map "x" 'objed-op-map)
+    (define-key map "c" 'objed-object-map)
+
     ;; special commands
-    (define-key map "," 'objed-last)
+    (define-key map "*" 'objed-mark-more)
+    (define-key map "," 'objed-goto-prev-identifier)
+    (define-key map "l" 'objed-last)
+
     ;; jump to objects with avy
     (define-key map "`" 'objed-ace)
     ;; swiper like object search
@@ -751,22 +760,10 @@ BEFORE and AFTER are forms to execute before/after calling the command."
        nil objed-run-or-eval ignore))
     (define-key map (kbd "<M-return>")
       'objed-insert-new-object)
-
     ;; TODO:
     ;; (define-key map "^" 'objed-raise-inner)
-
     (define-key map "!"
       (objed-define-op nil objed-replace-op))
-
-    ;; prefix keys
-    (define-key map "x" 'objed-op-map)
-    (define-key map "c" 'objed-object-map)
-
-    ;; direct object switches
-    (define-key map "." 'objed-identifier-object)
-    (define-key map "_" 'objed-symbol-object)
-    (define-key map "l" 'objed-line-object)
-    ;;(define-key map "%" 'objed-contents-object)
 
     map)
   "Keymap for commands when `objed' is active.")
@@ -869,7 +866,7 @@ To define new objects see `objed-define-object'.")
 
 Use `objed-define-dispatch' to define a dispatch command.")
 
-(objed-define-dispatch "*" objed--mark-all-inside)
+
 (objed-define-dispatch "#" objed--ace-switch-object)
 
 (objed-define-dispatch "u" objed--backward-until)
@@ -903,26 +900,39 @@ Use `objed-define-dispatch' to define a dispatch command.")
 
 (defun objed--forward-sexp ()
   (interactive)
-  (while (and (not (eobp))
-              (or  (and (not (bobp))
-                        (not (memq (char-syntax (char-before)) (list ?\s ?>)))
-                        (eq (char-syntax (char-after)) ?\"))
-                   (not (ignore-errors
-                          (call-interactively 'forward-sexp)
-                          t))))
-    (forward-char 1)))
+  (let ((stringp nil))
+    (while (and (not (eobp))
+                (or  (and (not (bobp))
+                          (save-excursion
+                            (objed--skip-ws)
+                            (eq (char-syntax (char-after)) ?\"))
+                          (setq stringp (objed--in-string-p nil t)))
+                     (not (ignore-errors
+                            (call-interactively 'forward-sexp)
+                            t))))
+      (if stringp
+          (progn (goto-char stringp)
+                 (forward-sexp 1))
+        (forward-char 1))
+      (setq stringp nil))))
 
 
 (defun objed--backward-sexp ()
   (interactive)
-  (while (and (not (bobp))
-              (or  (and (not (eobp))
-                        (eq (char-syntax (char-before)) ?\")
-                        (not (memq (char-syntax (char-after)) (list ?\s ?>))))
-                   (not (ignore-errors
-                          (call-interactively 'backward-sexp)
-                          t))))
-    (forward-char -1)))
+  (let ((stringp nil))
+    (while (and (not (bobp))
+                (or  (and (not (eobp))
+                          (save-excursion
+                            (objed--skip-ws t)
+                            (eq (char-syntax (char-before)) ?\"))
+                          (setq stringp (objed--in-string-p nil t)))
+                     (not (ignore-errors
+                            (call-interactively 'backward-sexp)
+                            t))))
+      (if stringp
+          (goto-char stringp)
+        (forward-char -1))
+      (setq stringp nil))))
 
 
 (defmacro objed--save-state (&rest body)
@@ -1971,6 +1981,18 @@ previous objects."
       ;; enf. top down order
       (objed--toggle-mark nil 'append)
       (objed--goto-previous))))
+
+
+(defun objed-mark-more ()
+  "Mark more instances of current object.
+
+First try to mark more in current defun after that mark more in
+current buffer."
+  (interactive)
+  (cond ((eq last-command this-command)
+         (objed--mark-all-inside 'buffer))
+        (t
+         (objed--mark-all-inside 'defun))))
 
 (defun objed-last ()
   "Resume to last state.
@@ -3135,7 +3157,7 @@ whitespace they build a sequence."
     (define-key map (kbd "M-[") 'objed-beg-of-object-at-point)
     (define-key map (kbd "M-]") 'objed-end-of-object-at-point)
     (define-key map (kbd "C-,") 'objed-prev-identifier)
-    (define-key map (kbd "C-.") 'objed-next-identifier)
+    (define-key map (kbd "C-.") 'objed-identifier-object)
     map)
   "Keymap for /function`objed-mode'.")
 
