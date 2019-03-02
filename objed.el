@@ -3,7 +3,7 @@
 
 ;; Author: Clemens Radermacher <clemera@posteo.net>
 ;; Package-Requires: ((emacs "25") (cl-lib "0.5"))
-;; Version: 0.5.1
+;; Version: 0.6
 ;; Keywords: convenience
 ;; URL: https://github.com/clemera/objed
 
@@ -233,6 +233,8 @@ function should return nil if objed should not initialize."
     (Info-prev-reference . face)
     (objed-next-identifier . identifier)
     (objed-prev-identifier . identifier)
+    (objed-first-identifier . identifier)
+    (objed-last-identifier . identifier)
     ;; editing entry commands
     (yank . region)
     (yank-pop . region)
@@ -693,12 +695,12 @@ BEFORE and AFTER are forms to execute before/after calling the command."
     (define-key map "m" 'objed-mark)
     ;; mark upwards
     (define-key map "M" 'objed-toggle-mark-backward)
-    ;; (define-key map "U" 'objed-unmark-all)
+    ;; (define-key map "M" 'objed-unmark-all)
 
     ;; "visual"
     (define-key map "v" 'objed-extend)
-    (define-key map "+" 'objed-include-trailing-ws)
-    (define-key map "-" 'objed-include-leading-ws)
+    (define-key map "@" 'objed-include-trailing-ws)
+    ;;(define-key map "-" 'objed-include-leading-ws)
 
     ;; basic edit ops
     (define-key map "k" 'objed-kill)
@@ -728,9 +730,10 @@ BEFORE and AFTER are forms to execute before/after calling the command."
 
     ;; direct object switches
     (define-key map "." 'objed-identifier-object)
+    (define-key map "," 'objed-goto-prev-identifier)
     (define-key map "_" 'objed-symbol-object)
+    (define-key map "l" 'objed-line-object)
     ;;(define-key map "%" 'objed-contents-object)
-
 
     ;; prefix keys
     (define-key map "x" 'objed-op-map)
@@ -738,11 +741,9 @@ BEFORE and AFTER are forms to execute before/after calling the command."
 
     ;; special commands
     (define-key map "*" 'objed-mark-more)
-    (define-key map "," 'objed-goto-prev-identifier)
-    (define-key map "l" 'objed-last)
-
-    ;; jump to objects with avy
-    (define-key map "`" 'objed-ace)
+    (define-key map "u" 'objed-last)
+    ;; zap to object, jump to objects with avy
+    (define-key map "z" 'objed-ace)
     ;; swiper like object search
     (define-key map (kbd "M-o") 'objed-occur)
     ;; TODO: start query replace in current object,
@@ -868,9 +869,8 @@ Use `objed-define-dispatch' to define a dispatch command.")
 
 
 (objed-define-dispatch "#" objed--ace-switch-object)
-
-(objed-define-dispatch "u" objed--backward-until)
-(objed-define-dispatch "z" objed--forward-until)
+(objed-define-dispatch "-" objed--backward-until)
+(objed-define-dispatch "+" objed--forward-until)
 
 (defun objed--backward-until (name)
   "Activate part from point backward until object NAME."
@@ -1136,7 +1136,8 @@ See `objed-cmd-alist'."
 (defun objed--init (&optional sym)
   "Initialize `objed'.
 
-SYM is a symbol (command or object symbol) used to initialize."
+SYM is a symbol (command or object symbol) used to initialize
+or object position data."
   ;; if anything went wrong make sure to start with clean state
   (when objed--buffer
     (objed--reset))
@@ -1179,9 +1180,11 @@ SYM is a symbol (command or object symbol) used to initialize."
   (set-cursor-color objed-cursor-color)
 
   ;; init object
-  (if (commandp sym)
-      (objed--switch-to-object-for-cmd sym)
-    (objed--switch-to sym))
+  (cond ((commandp sym)
+         (objed--switch-to-object-for-cmd sym))
+        ((symbolp sym)
+         (objed--switch-to sym))
+        (t (objed--update-current-object sym)))
 
   ;; transient map
   (fset #'objed--exit-objed
@@ -1662,24 +1665,36 @@ postitive prefix argument ARG move to the nth next object."
 (defun objed-top-object ()
   "Go to first instance of current object type."
   (interactive)
-  (objed--get-next (point))
-  (let ((o (car (objed--collect-backward
-                 (objed--min) (point-min)))))
-    (if (not o)
-        (message "Already at first instance")
-      (goto-char (car o))
-      (objed--update-current-object))))
+  ;; TODO: creat macro keyword so delegation
+  ;; can happen automatically, when specified
+  (cond ((eq objed--object 'identifier)
+         (objed-first-identifier)
+         (objed--update-current-object))
+        (t
+         (let ((top (save-excursion
+                      (goto-char (point-min))
+                      (objed--get-next (point)))))
+           (if (equal top objed--current-obj)
+               (message "Already at first instance")
+             (objed--update-current-object top)
+             (goto-char (objed--beg)))))))
+
 
 (defun objed-bottom-object ()
-  "Go to last instance of current object type."
+  "Go to first instance of current object type."
   (interactive)
-  (objed--get-next (point))
-  (let ((o (car (nreverse (objed--collect-forward
-                           (objed--max) (point-max))))))
-    (if (not o)
-        (message "Already at last instance")
-      (goto-char (car o))
-      (objed--update-current-object))))
+  (cond ((eq objed--object 'identifier)
+         (objed-last-identifier)
+         (objed--update-current-object))
+        (t
+         (let ((bot (save-excursion
+                      (goto-char (point-max))
+                      (objed--get-prev (point)))))
+           (if (equal bot objed--current-obj)
+               (message "Already at last instance")
+             (objed--update-current-object bot)
+             (goto-char (objed--beg)))))))
+
 
 (defun objed-expand-context ()
   "Expand to objects based on context.
@@ -1766,6 +1781,28 @@ If called from code decide for activation with char object using
   (objed--init 'char)
   (when (objed-context-object)
     (goto-char (objed--end))))
+
+;;;###autoload
+(defun objed-until-beg-of-object-at-point ()
+  "Move to beginning of object at point and active text moved over."
+  (interactive)
+  (let ((pos (point)))
+    (objed--init 'char)
+    (when (objed-context-object)
+      (objed--reverse)
+      (goto-char (objed--ibeg))
+      (objed--change-to :end pos :iend pos))))
+
+;;;###autoload
+(defun objed-until-end-of-object-at-point ()
+  "Move to end of object at point and active text moved over."
+  (interactive)
+  (let ((pos (point)))
+    (objed--init 'char)
+    (when (objed-context-object)
+      (objed--reverse)
+      (goto-char (objed--iend))
+      (objed--change-to :beg pos :ibeg pos))))
 
 (defun objed-toggle-side ()
   "Move to other side of object.
@@ -3154,10 +3191,14 @@ whitespace they build a sequence."
 (defvar objed-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "M-SPC") 'objed-activate)
+    (define-key map (kbd "M-(") 'objed-until-beg-of-object-at-point)
+    (define-key map (kbd "M-)") 'objed-until-end-of-object-at-point)
     (define-key map (kbd "M-[") 'objed-beg-of-object-at-point)
     (define-key map (kbd "M-]") 'objed-end-of-object-at-point)
     (define-key map (kbd "C-,") 'objed-prev-identifier)
     (define-key map (kbd "C-.") 'objed-identifier-object)
+    (define-key map (kbd "C-<") 'objed-first-identifier)
+    (define-key map (kbd "C->") 'objed-last-identifier)
     map)
   "Keymap for /function`objed-mode'.")
 
@@ -3183,14 +3224,17 @@ and `avy' if they are available. This can be deactivated by
 setting the user options `objed-use-which-key-if-available-p' and
 `objed-use-avy-if-available-p' before loading."
   :global t
+  :keymap objed-mode-map
   :require 'objed
   (if objed-mode
       (progn
+        (add-hook 'minibuffer-setup-hook 'objed--reset)
         (setq objed--which-key-avail-p (when objed-use-which-key-if-available-p
                                          (require 'which-key nil t))
               objed--avy-avail-p (when objed-use-avy-if-available-p
                                    (require 'avy nil t)))
         (objed--install-advices objed-cmd-alist t))
+    (remove-hook 'minibuffer-setup-hook 'objed--reset)
     (objed--remove-advices objed-cmd-alist)))
 
 
