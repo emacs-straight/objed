@@ -3,7 +3,7 @@
 
 ;; Author: Clemens Radermacher <clemera@posteo.net>
 ;; Package-Requires: ((emacs "25") (cl-lib "0.5"))
-;; Version: 0.6
+;; Version: 0.7.1
 ;; Keywords: convenience
 ;; URL: https://github.com/clemera/objed
 
@@ -215,6 +215,7 @@ function should return nil if objed should not initialize."
     (back-to-indentation . line)
     (org-beginning-of-line . line)
     (org-end-of-line . line)
+    (recenter-top-bottom . line)
     (forward-sentence . sentence)
     (org-forward-sentence . sentence)
     (backward-sentence . sentence)
@@ -240,6 +241,7 @@ function should return nil if objed should not initialize."
     (yank-pop . region)
     ;; misc
     (which-key-C-h-dispatch . char)
+    (switch-to-buffer . char)
     )
   "Entry commands and associated objects."
   :group 'objed
@@ -264,7 +266,6 @@ be used to restore previous states."
     undo-only
     delete-other-windows
     reposition-window
-    recenter-top-bottom
     eval-defun
     eval-last-sexp
     )
@@ -395,7 +396,9 @@ If this list contains an entry for an operation, the
 exit function is called after execution of the operation.")
 
 (defvar objed--after-init-alist
-  '((move-end-of-line . objed--object-trailing-line)
+  '((move-beginning-of-line . objed--object-until-bol)
+    (org-beginning-of-line . objed--object-until-bol)
+    (move-end-of-line . objed--object-trailing-line)
     (org-end-of-line . objed--object-trailing-line)
     (back-to-indentation . objed--until-start)
     (beginning-of-buffer . objed--until-start)
@@ -517,6 +520,7 @@ update to given object."
                (objed--init name))
              ;; goto next on repeat
              (cond  ((eq name current)
+                     (setq this-command 'objed-goto-next)
                      (objed--goto-next))
                     (t (when (objed--switch-to name)
                          (goto-char (objed--beg))))))))))
@@ -802,20 +806,37 @@ Other single character keys are bound to `objed-undefined'."
 
 (defvar objed-op-map
   (let ((map (objed--define-prefix "x" 'objed-op-map)))
+    ;; apply region command on object
     (define-key map "x" 'objed-op-x)
-
+    ;; todo: show object op hydra command
     (define-key map "c"
       ;; upcase, downcase, capitalize, reformat
       (objed-define-op nil objed-case-op))
 
-    ;; experimental
     (define-key map "e" 'objed-eval)
-    ;; uses edit-indirect if av., via prefix
     (define-key map "n" 'objed-narrow)
+    ;; actions analog to C-x C-KEY which exit
+    (define-key map "s" 'save-buffer)
+    (define-key map "f" 'find-file)
+    (define-key map "w" 'write-file)
+    (define-key map "v" 'find-alternate-file)
+    (define-key map "b" 'switch-to-buffer)
+    (define-key map "o" 'objed-other-window)
+    (define-key map "1" 'delete-other-windows)
+    (define-key map "2" 'split-window-vertically)
+    (define-key map "3" 'split-window-horizontally)
+
     map)
   "Map for additional operations called via a prefix from `objed-map'.
 
 To define new operations see `objed-define-op'.")
+
+(defun objed-other-window ()
+  "Like `other-window' for objed."
+  (interactive)
+  (objed--reset--objed-buffer)
+  (other-window 1)
+  (objed--init (or objed--object 'char)))
 
 
 (defvar objed-object-map
@@ -1097,6 +1118,13 @@ See `objed-cmd-alist'."
   (when objed--current-obj
     (goto-char (objed--beg))))
 
+(defun objed--object-until-bol (pos)
+  "Activate leading part from POS."
+  (unless (<= pos (objed--indentation-position))
+    (objed--reverse))
+  (goto-char (objed--beg))
+  (objed--change-to :end pos :iend pos))
+
 (defun objed--object-trailing-line (pos)
   "Activate trailing part from POS."
   (unless (eq objed--obj-state 'inner)
@@ -1147,7 +1175,7 @@ or object position data."
 
   (setq objed--buffer (current-buffer))
   (add-hook 'pre-command-hook 'objed--push-state nil t)
-
+  (add-hook 'post-command-hook 'objed--check-buffer)
   (pcase-dolist
       (`(,var . ,val)
        `((hl-line-range-function . objed-hl-function)
@@ -1442,7 +1470,21 @@ block, paragraph and other 'line based' objects.
 
 See also `objed--block-objects'."
   (interactive)
-  (cond ((eq last-command this-command)
+  (when (not (eq last-command this-command))
+    ;; get all which make sense from starting point
+    (setq blocks
+          (cl-remove-duplicates
+           (objed--get-blocks
+            (if (eq last-command 'move-beginning-of-line)
+                nil 'line)
+            #'objed--beg)
+           :test (lambda (a b)
+                   (let ((as (objed--beg (car (nthcdr 3 a))))
+                         (bs (objed--beg (car (nthcdr 3 b)))))
+                     (or (eq  as bs)
+                         (>= as (point))))))))
+  (cond ((or (eq last-command this-command)
+             (eq last-command 'move-beginning-of-line))
          (when blocks
            (let ((end (objed--end)))
              (objed--restore-state (pop blocks))
@@ -1454,18 +1496,7 @@ See also `objed--block-objects'."
                                        (objed--indentation-position))
                              'inner))
          (objed--change-to :end (point) :iend (point))
-         (goto-char (objed--beg))
-         ;; get all which make sense from starting point
-         (setq blocks
-               (cl-remove-duplicates
-                (objed--get-blocks
-                 nil ;;'line after inner...
-                 #'objed--beg)
-                :test (lambda (a b)
-                        (let ((as (objed--beg (car (nthcdr 3 a))))
-                              (bs (objed--beg (car (nthcdr 3 b)))))
-                          (or (eq  as bs)
-                              (>= as (point)))))))))))
+         (goto-char (objed--beg))))))
 
 
 (let ((blocks nil))
@@ -1479,7 +1510,22 @@ proceed to end of the indentation block, paragraph and other
 
 See also `objed--block-objects'."
     (interactive)
-    (cond ((eq last-command this-command)
+    (when (not (eq last-command this-command))
+      (setq blocks
+            (cl-remove-duplicates
+             (nreverse
+              (objed--get-blocks
+               'line
+               #'objed--end
+               ;; better for most cases
+               'inner))
+             :test (lambda (a b)
+                     (let ((as (objed--end (car (nthcdr 3 a))))
+                           (bs (objed--end (car (nthcdr 3 b)))))
+                       (or (eq  as bs)
+                           (<= as (point))))))))
+    (cond ((or (eq last-command this-command)
+               (eq last-command 'move-end-of-line))
            (when blocks
              (let ((beg (objed--beg)))
                (objed--restore-state (pop blocks))
@@ -1488,21 +1534,7 @@ See also `objed--block-objects'."
           (t
            (objed--switch-to 'line 'inner)
            (objed--change-to :beg (point) :ibeg (point))
-           (goto-char (objed--end))
-           ;; get all which make sense from starting point
-           (setq blocks
-                 (cl-remove-duplicates
-                  (nreverse
-                   (objed--get-blocks
-                    'line
-                    #'objed--end
-                    ;; better for most cases
-                    'inner))
-                  :test (lambda (a b)
-                          (let ((as (objed--end (car (nthcdr 3 a))))
-                                (bs (objed--end (car (nthcdr 3 b)))))
-                            (or (eq  as bs)
-                                (<= as (point)))))))))))
+           (goto-char (objed--end))))))
 
 
 (defun objed-forward-symbol ()
@@ -1812,11 +1844,9 @@ Default to sexp at point."
   (let ((sdiff (abs (- (point) (objed--beg))))
         (ediff (abs (- (point) (objed--end)))))
     (cond ((> ediff sdiff)
-           (goto-char (objed--end))
-           (objed--skip-ws t))
+           (goto-char (objed--end)))
           (t
-           (goto-char (objed--beg))
-           (objed--skip-ws)))))
+           (goto-char (objed--beg))))))
 
 (defun objed-exchange-point-and-mark ()
   "Exchange point and mark.
@@ -3073,11 +3103,36 @@ on."
   (setq mark-active nil)
   (objed--exit-objed))
 
+(defun objed--check-buffer ()
+  (when (not (eq (current-buffer) objed--buffer))
+    (objed--reset--objed-buffer)
+    (objed--init (or objed--object 'char))))
+
+(defun objed--reset--objed-buffer ()
+  ;; things that need to be reset in objed buffer
+  (when (buffer-live-p objed--buffer)
+    (with-current-buffer objed--buffer
+      ;; reset object as well?
+      ;;(setq objed--object nil)
+      (when objed-modeline-hint-p
+        (funcall objed-modeline-setup-func objed-mode-line-format 'reset))
+
+      (unless objed--hl-line-keep-p
+        (hl-line-mode -1))
+
+      (while objed--saved-vars
+        (let ((setting (pop objed--saved-vars)))
+          (if (consp setting)
+              (set (car setting) (cdr setting))
+            (kill-local-variable setting))))
+      (remove-hook 'pre-command-hook 'objed--push-state t))))
+
 (defun objed--reset ()
   "Reset variables and state information."
-  (when objed--buffer
-    (with-current-buffer objed--buffer
-
+  (if (eq (cadr overriding-terminal-local-map)
+          objed-map)
+      (objed--exit-objed)
+    (when objed--buffer
       (setq objed--opoint nil)
       (setq objed--electric-event nil)
 
@@ -3091,31 +3146,18 @@ on."
          objed--extend-cookie)
         (setq objed--extend-cookie nil))
 
-
-      (while objed--saved-vars
-        (let ((setting (pop objed--saved-vars)))
-          (if (consp setting)
-              (set (car setting) (cdr setting))
-            (kill-local-variable setting))))
-
       (when objed--saved-cursor
         (set-cursor-color objed--saved-cursor))
 
       (when objed--hl-cookie
         (face-remap-remove-relative objed--hl-cookie))
 
-      (when objed-modeline-hint-p
-        (funcall objed-modeline-setup-func objed-mode-line-format 'reset))
-
-      (unless objed--hl-line-keep-p
-        (hl-line-mode -1))
-
       (when (> (length objed--last-states) objed-states-max)
         (setq objed--last-states
               (cl-subseq objed--last-states 0 objed-states-max)))
-
+      (objed--reset--objed-buffer)
+      (remove-hook 'post-command-hook 'objed--check-buffer)
       (setq objed--block-p nil)
-      (remove-hook 'pre-command-hook 'objed--push-state t)
       (setq objed--buffer nil))))
 
 
