@@ -3,7 +3,7 @@
 
 ;; Author: Clemens Radermacher <clemera@posteo.net>
 ;; Package-Requires: ((emacs "25") (cl-lib "0.5"))
-;; Version: 0.7.2
+;; Version: 0.7.4
 ;; Keywords: convenience
 ;; URL: https://github.com/clemera/objed
 
@@ -23,8 +23,9 @@
 ;;; Commentary:
 ;;
 ;; A global minor-mode to navigate and edit text objects. Objed enables modal
-;; editing and composition of commands, too. It combines ideas of other Editors
-;; like Vim or Kakoune and tries to align them with regular Emacs conventions.
+;; editing and composition of commands, too. It combines ideas of other
+;; Editors like Vim or Kakoune and tries to align them with regular Emacs
+;; conventions.
 ;;
 ;; For more information also see:
 ;;
@@ -49,34 +50,36 @@
 ;; object, change the object state or switch to other object types.
 ;;
 ;; The object state is either "inner" or "whole" and is indicated in the
-;; modeline by (i) or (w) after the object type. With inner state, anything that
-;; would be considered delimiters or padding around an object is excluded.
+;; modeline by (i) or (w) after the object type. With inner state, anything
+;; that would be considered delimiters or padding around an object is
+;; excluded.
 ;;
-;; The user can apply operations to objects. By marking objects before applying
-;; an operation, s?he can even operate on multiple objects at once. This works
-;; similar to the way you interact with files in `dired'. When marking an object
-;; the point moves on to the next object of this type.
+;; The user can apply operations to objects. By marking objects before
+;; applying an operation, s?he can even operate on multiple objects at once.
+;; This works similar to the way you interact with files in `dired'. When
+;; marking an object the point moves on to the next object of this type.
 ;;
 ;; The object type used for initialization is determined by the mapping of the
-;; entry command (see `objed-cmd-alist'). For example using `beginning-of-defun'
-;; will activate `objed' using the `defun' object as initial object type. With
-;; command `next-line', `objed' would initialize with the `line' object.
+;; entry command (see `objed-cmd-alist'). For example using
+;; `beginning-of-defun' will activate `objed' using the `defun' object as
+;; initial object type. With command `next-line', `objed' would initialize
+;; with the `line' object.
 ;;
-;; Objeds modal state provides basic movement commands which move by line, word
-;; or character. Those switch automatically to the corresponding object type,
-;; otherwise they work the same as the regular Emacs movement commands. Other
-;; commands only activate the part between the initial position and the new
-;; position moved to. By repeating commands you can often expand/proceed to
-;; other objects. This way you can compose movement and editing operations very
-;; efficiently.
+;; Objeds modal state provides basic movement commands which move by line,
+;; word or character. Those switch automatically to the corresponding object
+;; type, otherwise they work the same as the regular Emacs movement commands.
+;; Other commands only activate the part between the initial position and the
+;; new position moved to. By repeating commands you can often expand/proceed
+;; to other objects. This way you can compose movement and editing operations
+;; very efficiently.
 ;;
 ;; The expansion commands distinguish between block objects (objects built out
 ;; of lines of text) and context objects (programming constructs like strings,
 ;; brackets or textual components like sentences). This way you can quickly
 ;; expand to the desired objects.
 ;;
-;; For example to move to the end of the paragraph, the user would first move to
-;; the end of the line with "e". This would activate the text between the
+;; For example to move to the end of the paragraph, the user would first move
+;; to the end of the line with "e". This would activate the text between the
 ;; starting position and the end of the line. The user can now continue to the
 ;; end of the paragraph by by pressing "e" again. Now s?he is able to proceed
 ;; even further by pressing "e" again OR to continue by adding new text to the
@@ -89,8 +92,8 @@
 ;; animated demos.
 ;;
 ;; To learn more about available features and commands have a look at the
-;; descriptions below or the Docstrings and bindings defined in `objed-map'. To
-;; define your own operations and text objects see `objed-define-op' and
+;; descriptions below or the Docstrings and bindings defined in `objed-map'.
+;; To define your own operations and text objects see `objed-define-op' and
 ;; `objed-define-object'.
 ;;
 ;; Although some features are still experimental the basic user interface will
@@ -99,14 +102,13 @@
 ;;
 ;; CONTRIBUTE:
 ;;
-;; I'm happy to receive pull requests or ideas to improve this
-;; package. Some parts suffer from the bottom up approach of
-;; developing it, but this also allowed me to experiment a lot and try
-;; ideas while working on them, something that Emacs is especially
-;; good at. Most of the features are tested using `emacs-lisp-mode'
-;; but hopefully there aren't to many problems using modes for other
-;; languages, I tried my best to write text objects in a language
-;; agnostic way. Testing this and writing more tests in general would
+;; I'm happy to receive pull requests or ideas to improve this package. Some
+;; parts suffer from the bottom up approach of developing it, but this also
+;; allowed me to experiment a lot and try ideas while working on them,
+;; something that Emacs is especially good at. Most of the features are tested
+;; using `emacs-lisp-mode' but hopefully there aren't to many problems using
+;; modes for other languages, I tried my best to write text objects in a
+;; language agnostic way. Testing this and writing more tests in general would
 ;; be an important next step.
 ;;
 ;; This package would never been possible without the helpful community around
@@ -135,8 +137,7 @@
 (defgroup objed-faces nil
   "Faces for `objed'"
   :group 'objed
-  :group 'faces
-  :prefix "objed-")
+  :group 'faces)
 
 ;; * Faces
 
@@ -169,8 +170,7 @@ If the current `major-mode' is in the list or derives from a
 member of it `objed' will not activate.
 
 See also `objed-disabled-p'"
-  :group 'objed
-  :type '(repeat symbol))
+    :type '(repeat symbol))
 
 (defcustom objed-init-p-function #'objed-init-p
   "Function which tests if objed is allowed to initialize.
@@ -194,8 +194,6 @@ function should return nil if objed should not initialize."
     (scroll-up-command . line)
     (scroll-down-command . line)
     (move-to-window-line-top-bottom . line)
-    (xref-find-definitions . line)
-    (xref-pop-marker-stack . line)
     (imenu . line)
     (backward-paragraph . paragraph)
     (forward-paragraph . paragraph)
@@ -230,6 +228,7 @@ function should return nil if objed should not initialize."
     (comint-next-prompt . output)
     (forward-button . face)
     (backward-button . face)
+    (sgml-skip-tag-backward . tag)
     (Info-next-reference . face)
     (Info-prev-reference . face)
     (objed-next-identifier . identifier)
@@ -241,11 +240,13 @@ function should return nil if objed should not initialize."
     (yank-pop . region)
     ;; misc
     (which-key-C-h-dispatch . char)
-    (switch-to-buffer . char)
     (find-file . char)
+    ;; keep object of buffer if available...
+    (switch-to-buffer . nil)
+    (xref-find-definitions . nil)
+    (xref-pop-marker-stack . nil)
     )
   "Entry commands and associated objects."
-  :group 'objed
   :type '(alist :key-type sexp
                 :value-type (choice sexp
                                     (repeat sexp))))
@@ -256,7 +257,6 @@ function should return nil if objed should not initialize."
 
 This option holds the number of times `objed-last' can
 be used to restore previous states."
-  :group 'objed
   :type 'integer)
 
 
@@ -274,17 +274,14 @@ be used to restore previous states."
 
 When regular commands are executed `objed' will exit its editing
 state. Commands added to this list wont do that."
-  :group 'objed
   :type '(repeat function))
 
 (defcustom objed-cursor-color "#e52b50"
   "Cursor color to use when `objed' is active."
-  :group 'objed
   :type 'color)
 
 (defcustom objed-which-key-order #'which-key-description-order
   "Key sort order to use for which key help popups."
-  :group 'objed
   :type 'function)
 
 (define-obsolete-variable-alias 'objed-modeline-hint-p
@@ -293,7 +290,6 @@ state. Commands added to this list wont do that."
 
 (defcustom objed-modeline-hint t
   "Whether to show hint for current object in mode line."
-  :group 'objed
   :type 'boolean)
 
 (defcustom objed-mode-line-format
@@ -305,7 +301,6 @@ state. Commands added to this list wont do that."
   "Format used to display hint in mode-line.
 
 Only relevant when `objed-modeline-hint-p' is non-nil."
-  :group 'objed
   :type 'sexp)
 
 (defcustom objed-modeline-setup-func #'objed--setup-mode-line
@@ -317,12 +312,10 @@ add/remove the mode line hint.
 It also recieves a second optional argument which indicates if
 the hint should be remove or added. If non-nil the hint should be
 removed."
-  :group 'objed
   :type 'symbol)
 
 (defcustom objed-initial-object 'region
   "Object to use as fallback for `objed-activate'."
-  :group 'objed
   :type 'symbol)
 
 
@@ -338,7 +331,6 @@ To avoid loading `which-key' set this var before activating `objed-mode.'")
   "Whether to allow loading and use of `which-key'.
 
 To avoid loading `which-key' set this var before activating `objed-mode.'"
-  :group 'objed
   :type 'boolean)
 
 (define-obsolete-variable-alias 'objed-auto-wk-top-level-p
@@ -353,7 +345,6 @@ The top level help is also available via `objed-show-top-level'.")
 
 Respects `which-key-idle-delay'.
 The top level help is also available via `objed-show-top-level'."
-  :group 'objed
   :type 'boolean)
 
 (define-obsolete-variable-alias 'objed-use-avy-if-available-p
@@ -366,7 +357,6 @@ To avoid loading `avy' set this var before activating `objed-mode.'")
   "Whether to allow loading and use of `avy'.
 
 To avoid loading `avy' set this var before activating `objed-mode.'"
-  :group 'objed
   :type 'boolean)
 
 (define-obsolete-variable-alias 'objed-use-hl-p
@@ -375,18 +365,13 @@ To avoid loading `avy' set this var before activating `objed-mode.'"
 
 (defcustom objed-use-hl t
   "Whether allow loading and use of `hl-line' to highlight the current object."
-  :group 'objed
   :type 'boolean)
 
 
-;; info for byte-comp
-(defvar ivy-sort-function-alist nil)
-(defvar which-key-replacement-alist nil)
-(defvar which-key-mode nil)
-(defvar which-key-idle-delay 1.0)
-(defvar which-key--using-top-level nil)
-(defvar avy-all-windows nil)
-(defvar avy-action nil)
+;; dyns
+(defvar which-key-idle-delay)
+(defvar which-key--using-top-level)
+(defvar which-key-replacement-alist)
 
 
 (declare-function objed--exit-objed "objed" nil t)
@@ -400,6 +385,7 @@ To avoid loading `avy' set this var before activating `objed-mode.'"
 (declare-function edit-indirect-commit "ext:edit-indirect")
 (declare-function electric-pair-syntax-info "ext:elec-pair")
 (declare-function hl-line-unhighlight "ext:hl-line")
+(declare-function hl-line-highlight "ext:hl-line")
 
 
 
@@ -545,17 +531,8 @@ update to given object."
     (cond (binding
            (funcall (cdr binding) name))
           (t
-           (let ((current objed--object))
-             ;; object called as command via M-x, objed need to
-             ;; initialize first
-             (when (not objed--buffer)
-               (objed--init name))
-             ;; goto next on repeat
-             (cond  ((eq name current)
-                     (setq this-command 'objed-goto-next)
-                     (objed--goto-next))
-                    (t (when (objed--switch-to name)
-                         (goto-char (objed--beg))))))))))
+           (when (objed--init name)
+             (goto-char (objed--beg)))))))
 
 
 (defun objed--switch-to-object-for-cmd (cmd)
@@ -774,7 +751,7 @@ to the selected one."
       (objed-define-op nil objed-electric))
 
     ;; direct object switches
-    (define-key map "." 'objed-identifier-object)
+    (define-key map "." 'objed-goto-next-identifier)
     (define-key map "," 'objed-goto-prev-identifier)
     (define-key map "_" 'objed-symbol-object)
     (define-key map "l" 'objed-line-object)
@@ -806,8 +783,9 @@ to the selected one."
        nil objed-run-or-eval ignore))
     (define-key map (kbd "<M-return>")
       'objed-insert-new-object)
-    ;; TODO:
-    ;; (define-key map "^" 'objed-raise-inner)
+    (define-key map "^" 'objed-raise)
+    (define-key map "!" 'objed-execute)
+
     map)
   "Keymap for commands when `objed' is active.")
 
@@ -849,16 +827,16 @@ Other single character keys are bound to `objed-undefined'."
       ;; upcase, downcase, capitalize, reformat
       (objed-define-op nil objed-case-op))
 
+    (define-key map "q"
+      (objed-define-op nil objed-reformat-op ignore))
     (define-key map "e" 'objed-eval)
-    (define-key map "d" 'dired-jump)
-    ;; remove restrictions
     (define-key map "r" ctl-x-r-map)
     (define-key map "n" 'objed-narrow)
 
     ;; TODO: undo propose integration
     (define-key map "u" (objed--call-and-switch undo char))
-    (define-key map "z" 'objed-repeat)
-
+    (define-key map "d" 'dired-jump)
+    ;; (define-key map "z" 'objed-repeat)
     ;; actions analog to C-x C-KEY which exit
     (define-key map "s" 'save-buffer)
     (define-key map "f" 'find-file)
@@ -867,6 +845,9 @@ Other single character keys are bound to `objed-undefined'."
     (define-key map "b" 'switch-to-buffer)
     (define-key map "o" 'objed-other-window)
     (define-key map "k" 'objed-kill-buffer)
+
+    (define-key map "j" 'imenu)
+    (define-key map "0" 'delete-window)
     (define-key map "1" 'delete-other-windows)
     (define-key map "2" 'split-window-vertically)
     (define-key map "3" 'split-window-horizontally)
@@ -925,6 +906,8 @@ To define new operations see `objed-define-op'.")
 
     (define-key map "t" 'objed-tag-object)
     (define-key map "f" 'objed-file-object)
+    (define-key map "m" 'objed-mail-object)
+    (define-key map "u" 'objed-url-object)
 
     (define-key map "*" 'objed-section-object)
     (define-key map "l" 'objed-page-object)
@@ -1244,8 +1227,9 @@ or object position data."
          (suggest-key-bindings . nil)
          (which-key-sort-order . ,objed-which-key-order)
          (which-key-replacement-alist
-          . ,(append objed--wk-replacement-alist
-                     which-key-replacement-alist))))
+          . ,(when (bound-and-true-p which-key-replacement-alist)
+               (append objed--wk-replacement-alist
+                       which-key-replacement-alist)))))
     (push
      (if (local-variable-p var)
          (cons var (symbol-value var))
@@ -1270,23 +1254,30 @@ or object position data."
   (set-cursor-color objed-cursor-color)
 
   ;; init object
-  (cond ((commandp sym)
-         (objed--switch-to-object-for-cmd sym))
-        ((symbolp sym)
-         (objed--switch-to sym))
-        (t (objed--update-current-object sym)))
+  (prog1 (cond ((commandp sym)
+                (objed--switch-to-object-for-cmd sym))
+               ((symbolp sym)
+                (objed--switch-to sym))
+               (t
+                (unless objed--object
+                  (setq objed--object 'char))
+                ;; uses objed--object
+                (objed--update-current-object sym)))
 
-  ;; transient map
-  (fset #'objed--exit-objed
-        (set-transient-map objed-map
-                           #'objed--keep-transient-p
-                           #'objed--reset))
+    ;; make sure the object is highlighted
+    (hl-line-highlight)
 
-  (when objed-modeline-hint-p
-    (funcall objed-modeline-setup-func objed-mode-line-format))
-  ;; show which key after redisplay if active
-  (when objed-auto-wk-top-level-p
-    (run-at-time 0 nil #'objed-show-top-level)))
+    ;; transient map
+    (fset #'objed--exit-objed
+          (set-transient-map objed-map
+                             #'objed--keep-transient-p
+                             #'objed--reset))
+
+    (when objed-modeline-hint-p
+      (funcall objed-modeline-setup-func objed-mode-line-format))
+    ;; show which key after redisplay if active
+    (when objed-auto-wk-top-level-p
+      (run-at-time 0 nil #'objed-show-top-level))))
 
 
 (defun objed--setup-mode-line (format &optional reset)
@@ -1405,7 +1396,7 @@ matches IREGEX is not displayed."
   (when (and objed--which-key-avail-p
              ;; let the user deactivate later as well...
              objed-use-which-key-if-available-p
-             which-key-mode
+             (bound-and-true-p which-key-mode)
              (or nowait (sit-for which-key-idle-delay)))
     (prog1 t
       (setq which-key--using-top-level desc)
@@ -1418,7 +1409,7 @@ matches IREGEX is not displayed."
 
 ;; * Basic Movement, Block Objects (textblocks)
 
-(defvar objed--block-objects '(buffer section paragraph textblock block indent line)
+(defvar objed--block-objects '(buffer paragraph block indent textblock)
   "List of objects which are 'line based'.
 
 Objects which are built by lines of text.")
@@ -1900,6 +1891,60 @@ back to `objed-initial-object' if no match found."
       (goto-char (objed--iend))
       (objed--change-to :beg pos :ibeg pos))))
 
+(defun objed--get-ident-format ()
+  "Get format string for identifier."
+  (let ((sym (or (symbol-at-point)
+                 (and (re-search-forward "\\_<" nil t)
+                      (symbol-at-point)))))
+    (when sym
+      (format "\\_<%s\\_>" sym))))
+
+;;;###autoload
+(defun objed-first-identifier ()
+  "Move to first instance of identifier at point."
+  (interactive)
+  (let ((ident (objed--get-ident-format)))
+    (when ident
+      (goto-char (point-min))
+      (when (re-search-forward ident nil t)
+        (goto-char (match-beginning 0))))))
+
+;;;###autoload
+(defun objed-last-identifier ()
+  "Move to last instance of identifier at point."
+  (interactive)
+  (let ((ident (objed--get-ident-format)))
+    (when ident
+      (goto-char (point-max))
+      (re-search-backward ident nil t))))
+
+;;;###autoload
+(defun objed-next-identifier ()
+  "Activate object with identifier at point."
+  (interactive)
+  (objed--next-identifier))
+
+;;;###autoload
+(defun objed-prev-identifier ()
+  "Activate object with identifier at point."
+  (interactive)
+  (objed--prev-identifier))
+
+(defun objed-goto-prev-identifier ()
+  "Switch to previous identifier."
+  (interactive)
+  (objed--prev-identifier)
+  (when (objed--switch-to 'identifier)
+    (goto-char (objed--beg))))
+
+(defun objed-goto-next-identifier ()
+  "Switch to next identifier."
+  (interactive)
+  (when (eq objed--object 'identifier)
+    (objed--next-identifier))
+  (when (objed--switch-to 'identifier)
+    (goto-char (objed--beg))))
+
 (defun objed-toggle-side ()
   "Move to other side of object.
 
@@ -1999,6 +2044,8 @@ textual content of an object via the content object."
     (force-mode-line-update)))
 
 
+(defvar avy-all-windows)
+(defvar avy-action)
 (defun objed-ace ()
   "Jump to an object with `avy'."
   (interactive)
@@ -2022,6 +2069,7 @@ textual content of an object via the content object."
             (t
              (message "No objects found."))))))
 
+(defvar ivy-sort-function-alist)
 (defun objed-occur ()
   "Complete initial lines and jump to object."
   (interactive)
@@ -2575,9 +2623,8 @@ Swaps the current object with the previous one."
   (interactive)
   (objed--switch-and-move 'line 'forward))
 
+
 (defvar edit-indirect--overlay)
-
-
 (defun objed-narrow (&optional arg)
   "Narrow to object.
 
@@ -2586,7 +2633,7 @@ With prefix argument ARG call `edit-indirect-region' if
   (interactive "P")
   (if objed--marked-ovs
       (message "Narrowing not possible with multiple objects.")
-    (cond (edit-indirect--overlay
+    (cond ((bound-and-true-p edit-indirect--overlay)
            (edit-indirect-commit))
           ((buffer-narrowed-p)
            (widen))
@@ -2598,7 +2645,7 @@ With prefix argument ARG call `edit-indirect-region' if
              (apply 'narrow-to-region (objed--current)))))))
 
 
-(defvar eval-sexp-fu-flash-mode nil)
+(defvar eval-sexp-fu-flash-mode)
 ;; adapted from lispy
 (defun objed--eval-func (beg end &optional replace)
   "Evaluate code between BEG and END.
@@ -2646,6 +2693,22 @@ If REPLACE is non-nil replace the region with the result."
                 (insert str)))))))))
 
 
+;; TODO: toggle like fill/unfill
+(defun objed-reformat-op (beg end)
+  "Reformat object between BEG and END."
+  (interactive "r")
+  (cond ((memq objed--object (list 'paragraph 'sentence 'line 'textblock))
+         (fill-paragraph)
+         (objed--init objed--object))
+        ((memq objed--object (list 'sexp 'bracket))
+         (save-excursion
+           (goto-char beg)
+           (indent-pp-sexp))
+         (objed--init objed--object))
+        (t
+         (objed-indent beg end))))
+
+
 (defun objed-eval (&optional replace)
   "Eval objects.
 
@@ -2666,8 +2729,8 @@ If REPLACE is non-nil replace evaluated code with result."
 (defun objed-pipe-region (beg end cmd &optional variant)
   "Pipe region text between BEG and END through a shell CMD.
 
-VARIANT is either the char r or e to either replace the text with
-the result or to echo it."
+VARIANT is either the char r or e to either replace the text with the result
+or to echo it."
   (interactive (let ((variant (read-char-choice "Replace [r] Echo [e] "
                                                 (list ?r ?e)))
                      (cmd (read-shell-command "Shell command: ")))
@@ -2820,12 +2883,12 @@ c: capitalize."
 (defun objed-replace ()
   "Query replace narrowed to region BEG, END."
   (interactive)
-  (let ((beg (objed--beg))
-        (end (objed--end)))
-    (if (memq objed--object '(word symbol identifier))
-        (objed--replace-ident beg end)
-      (save-excursion
-        (save-restriction
+  (if (memq objed--object '(word symbol identifier))
+      (objed--replace-object)
+    (save-excursion
+      (save-restriction
+        (let ((beg (objed--beg))
+              (end (objed--end)))
           (narrow-to-region beg end)
           (goto-char (point-min))
           (hl-line-unhighlight)
@@ -2834,22 +2897,25 @@ c: capitalize."
               (call-interactively 'anzu-query-replace-regexp)
             (call-interactively 'query-replace-regexp)))))))
 
-(defun objed--replace-ident (beg end)
-  "Replace text between BEG and END for object(s)."
-  (let ((str (objed--with-allow-input
-              (read-string "Replace with: "
-                          nil nil (buffer-substring beg end)))))
-    (if objed--marked-ovs
-        (objed--do-objects (apply-partially #'objed--replace-action str)
-                           this-command)
-      (objed--replace-action str beg end))))
+(defun objed--replace-object ()
+  "Replace current object(s) with string queried from user."
+  (let* ((beg (objed--beg))
+         (end (objed--end))
+         (str (objed--with-allow-input
+               (read-string "Replace with: "
+                            nil nil (buffer-substring beg end))))
+         (n (objed--do (apply-partially
+                        #'objed--replace-region-with-string str)
+                       this-command)))
+    (message "Replaced %s objects." n)))
 
-(defun objed--replace-action (str beg end)
-  "Replace region BEG, END with STR."
+
+(defun objed--replace-region-with-string (str beg end)
+  "Use string STR to replace region BEG, END."
   (save-excursion
     (goto-char beg)
-    (delete-region beg end)
-    (insert str)))
+    (search-forward (buffer-substring beg end))
+    (replace-match str)))
 
 
 ;; * Ipipe
@@ -3128,7 +3194,38 @@ If nil ‘eval-region’ is used instead.")
               (eval-region beg end t))
              ((and (require lib nil t)
                    (commandp cmd))
-             (call-interactively cmd))))))
+              (call-interactively cmd))))))
+
+
+(defun objed-raise ()
+  "Replace object with inner part."
+  (interactive)
+  (let* ((ibeg (objed--ibeg))
+         (iend (objed--iend))
+         (istring (buffer-substring ibeg iend))
+         (obeg (objed--obeg))
+         (oend (objed--oend)))
+    (objed--reset)
+    (delete-region obeg oend)
+    (objed--init
+     (objed-make-object :beg (point)
+                        :end (save-excursion (insert istring)
+                                             (point))))))
+
+
+(defun objed-execute ()
+  "Execute object contents as shell commands."
+  (interactive)
+  (let* ((beg (objed--beg))
+         (end (objed--end))
+         (str (concat (buffer-substring beg end) "\n"))
+         (lines (split-string str "[\r\n]" t)))
+    (objed--reset)
+    (dolist (line lines)
+      (when (y-or-n-p (concat (format "$ %s" line)
+                              "?"))
+        (shell-command line)))
+    (objed--init objed--object)))
 
 
 ;; * Exit active state
@@ -3183,13 +3280,13 @@ on and RANGE hold the object position data."
   (objed--exit-objed))
 
 (defun objed--check-buffer ()
-  "Check if current buffer is still the `objed-buffer'.
+  "Check if current buffer is still the `objed--buffer'.
 
 Resets objed if appropriate."
   (unless objed--with-allow-input
     (when (not (eq (current-buffer) objed--buffer))
       (objed--reset--objed-buffer)
-      (select-window (get-buffer-window (current-buffer)))
+      (select-window (get-buffer-window (current-buffer)) t)
       (objed--init (or objed--object 'char)))))
 
 (defun objed--reset--objed-buffer ()
@@ -3253,7 +3350,9 @@ Resets objed if appropriate."
   "Execute ACTION on current object(s).
 
 NAME is the symbol used for current op and defaults to
-`this-command'."
+`this-command'.
+
+Return number of times ACTION got applied."
   (let ((name (or name this-command)))
     (cond (objed--marked-ovs
            (objed--do-objects action name))
@@ -3267,26 +3366,30 @@ NAME is the symbol used for current op and defaults to
       (let ((text (apply #'buffer-substring range))
             (range (list (set-marker (make-marker) (car range))
                          (set-marker (make-marker) (cadr range)))))
-        (apply action range)
-        (objed-exit-op name text range)))))
+        (prog1 1
+          (apply action range)
+          (objed-exit-op name text range))))))
 
 (defun objed--do-objects (action name)
   "Apply ACTION for op named NAME on marked objects."
   (let ((ovs objed--marked-ovs)
-        (appendp (memq action '(kill-region copy-region-as-kill))))
+        (appendp (memq action '(kill-region copy-region-as-kill)))
+        (n 0))
     (save-excursion
       (dolist (ov (nreverse (copy-sequence ovs)))
         (let ((beg (overlay-start ov))
               (end (overlay-end ov)))
           (when (and beg end)
             (goto-char beg)
-            (funcall action beg end))
+            (funcall action beg end)
+            (cl-incf n))
           (when appendp
             (setq last-command 'kill-region))
           (delete-overlay ov))))
-    ;; always ?
-    (setq objed--marked-ovs nil)
-    (objed-exit-op name)))
+    (prog1 n
+      ;; always ?
+      (setq objed--marked-ovs nil)
+      (objed-exit-op name))))
 
 
 (defun objed--ov-sequence-p (ovs)
@@ -3324,7 +3427,7 @@ whitespace they build a sequence."
     (define-key map (kbd "M-[") 'objed-beg-of-object-at-point)
     (define-key map (kbd "M-]") 'objed-end-of-object-at-point)
     (define-key map (kbd "C-,") 'objed-prev-identifier)
-    (define-key map (kbd "C-.") 'objed-identifier-object)
+    (define-key map (kbd "C-.") 'objed-next-identifier)
     (define-key map (kbd "C-<") 'objed-first-identifier)
     (define-key map (kbd "C->") 'objed-last-identifier)
     map)

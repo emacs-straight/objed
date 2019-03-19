@@ -2,7 +2,10 @@
 ;; Copyright (C) 2018-2019  Free Software Foundation, Inc.
 
 ;; Author: Clemens Radermacher <clemera@posteo.net>
+;; Package-Requires: ((emacs "25") (cl-lib "0.5"))
+;; Version: 0.7.2
 ;; Maintainer: Clemens Radermacher <clemera@posteo.net>
+;; URL: https://github.com/clemera/objed
 
 ;; This program is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -48,11 +51,12 @@
 
 (declare-function objed--install-advices "ext:objed")
 (declare-function objed--install-advices-for "ext:objed")
+(declare-function objed-goto-next-identifier "ext:objed")
+(declare-function objed-goto-prev-identifier "ext:objed")
+(declare-function objed-next-identifier "ext:objed")
+(declare-function objed-prev-identifier "ext:objed")
 
 
-;; dyn bindings
-(defvar avy-action nil)
-(defvar avy-all-windows nil)
 
 ;; * Macros
 
@@ -613,7 +617,8 @@ character of the string."
             (push (cons str (point)) lines)))))))
 
 
-
+(defvar avy-action)
+(defvar avy-all-windows)
 (defun objed--ace-until (&optional start back)
   "Get position of object using `avy'.
 
@@ -737,7 +742,11 @@ specific versions of object."
   (cond ((memq query '(:try-next :try-prev))
          (condition-case nil
              (funcall objf query)
-           ((end-of-buffer beginning-of-buffer search-failed scan-error)
+           (search-failed
+            (error "No %s %s found"
+                   (if (eq query :try-next) "next" "previous")
+                   objed--object))
+           ((end-of-buffer beginning-of-buffer scan-error)
             (ignore))))
         (t
          (funcall objf query))))
@@ -1075,17 +1084,6 @@ object."
         (when obj
           (objed--update-current-object obj)
           (objed--goto-char (objed--beg obj)))))))
-
-
-(defun objed-goto-prev-identifier (arg)
-  "Switch to nth previous identifier.
-
-nth is given by ARG."
-  (interactive "P")
-  (unless (eq objed--object 'identifier)
-    (objed--switch-to 'identifier))
-  (objed--goto-previous arg))
-
 
 (defun objed--make-object-overlay (&optional obj)
   "Create an overlay to mark current object.
@@ -1604,15 +1602,53 @@ comments."
   :atp
   (looking-at "/\\|\\\\")
   :get-obj
-  ;; TODO: inner bounds without extension
   (let* ((bounds (bounds-of-thing-at-point 'filename))
          (file (and bounds (buffer-substring (car bounds) (cdr bounds)))))
-    (when (and file (string-match "/\\|\\\\" file))
-      bounds))
+    (when (and file (string-match (rx (or (and bos (or "/" "\\"))
+                                          (and "." (* alnum) eos)))
+                                  file))
+      (objed-make-object :obounds bounds
+                         :ibounds
+                         (let ((ifile (or (file-name-directory file)
+                                          (file-name-sans-extension file))))
+                           (when ifile
+                             (goto-char (car bounds))
+                             (search-forward ifile)
+                             (cons (match-beginning 0) (match-end 0)))))))
   :try-next
-  (re-search-forward  "/\\|\\\\" nil t)
+  (re-search-forward  (rx (or (or "/" "\\")
+                              (and "." (* alnum))))
+                      nil t)
   :try-prev
-  (re-search-backward  "/\\|\\\\" nil t))
+  (re-search-backward  (rx (or (or "/" "\\")
+                               (and "." (* alnum))))
+                       nil t))
+
+(objed-define-object nil mail
+  :get-obj
+  (bounds-of-thing-at-point 'email)
+  :try-next
+  (re-search-forward  "@")
+  :try-prev
+  (re-search-backward  "@"))
+
+(objed-define-object nil url
+  :get-obj
+  (let ((bounds (bounds-of-thing-at-point 'url)))
+    (when bounds
+      (objed-make-object :obounds bounds
+                         :ibounds
+                         (progn
+                           (goto-char (car bounds))
+                           (re-search-forward "https?://" nil t)
+                           (cons (point)
+                                 (if (search-forward "/" (cdr bounds) t)
+                                     (1- (point))
+                                   (cdr bounds)))))))
+  :try-next
+  (re-search-forward "http")
+  :try-prev
+  (re-search-backward "http"))
 
 (objed-define-object nil page
   :atp
@@ -2021,14 +2057,13 @@ non-nil the indentation block can contain empty lines."
   :get-obj
   (bounds-of-thing-at-point 'symbol)
   :try-next
-  (objed-next-identifier)
+  (objed--next-identifier)
   :try-prev
-  (objed-prev-identifier))
+  (objed--prev-identifier))
 
-;;;###autoload
-(defun objed-next-identifier ()
+
+(defun objed--next-identifier ()
   "Move to next identifier."
-  (interactive)
   (let ((bds nil))
     (if (not (setq bds (bounds-of-thing-at-point 'symbol)))
         (re-search-forward  "\\_<" nil t)
@@ -2039,14 +2074,12 @@ non-nil the indentation block can contain empty lines."
         (if (re-search-forward (format "\\_<%s\\_>" sym) nil t)
             (goto-char (match-beginning 0))
           (goto-char (car bds))
-          (when (or (eq real-this-command #'objed-current-or-next-context)
-                    (eq real-this-command #'objed-next-identifier))
+          (when (or (eq real-this-command #'objed-next-identifier)
+                    (eq real-this-command #'objed-goto-next-identifier))
             (run-at-time 0 nil (apply-partially #'message "Last one!"))))))))
 
-;;;###autoload
-(defun objed-prev-identifier ()
+(defun objed--prev-identifier ()
   "Move to previous identifier."
-  (interactive)
   (let ((bds nil))
     (if (not (setq bds (bounds-of-thing-at-point 'symbol)))
         (re-search-backward  "\\_<" nil t)
@@ -2058,36 +2091,13 @@ non-nil the indentation block can contain empty lines."
           (if (re-search-backward (format "\\_<%s\\_>" sym) nil t)
               (goto-char (match-beginning 0))
             (goto-char (car bds))
-            (when (or (eq real-this-command #'objed-current-or-previous-context)
-                      (eq real-this-command #'objed-prev-identifier))
+            (when (or (eq real-this-command #'objed-prev-identifier)
+                      (eq real-this-command #'objed-goto-prev-identifier))
               (run-at-time 0 nil (apply-partially #'message "First one!")))))))))
 
-(defun objed--get-ident-format ()
-  "Get format string for identifier."
-  (let ((sym (or (symbol-at-point)
-                 (and (re-search-forward "\\_<" nil t)
-                      (symbol-at-point)))))
-    (when sym
-      (format "\\_<%s\\_>" sym))))
 
-;;;###autoload
-(defun objed-first-identifier ()
-  "Move to first instance of identifier at point."
-  (interactive)
-  (let ((ident (objed--get-ident-format)))
-    (when ident
-      (goto-char (point-min))
-      (when (re-search-forward ident nil t)
-        (goto-char (match-beginning 0))))))
 
-;;;###autoload
-(defun objed-last-identifier ()
-  "Move to last instance of identifier at point."
-  (interactive)
-  (let ((ident (objed--get-ident-format)))
-    (when ident
-      (goto-char (point-max))
-      (re-search-backward ident nil t))))
+
 
 
 (objed-define-object nil section
@@ -2163,21 +2173,21 @@ non-nil the indentation block can contain empty lines."
        (or (looking-at "<")
            (looking-back ">" 1)))
   :get-obj
-  ;; TODO: fix detection if point inside <..|..>
+  ;; TODO: fix sgml-backward not working
   (when (derived-mode-p 'sgml-mode)
     ;; like with bracket detect at boundary
     (objed-make-object
      :beg (progn (unless (looking-at "<")
                    (sgml-skip-tag-backward 1))
                  (point))
-     :ibeg (save-excursion (search-forward ">" nil t)
-                           (point))
+     :ibeg (save-excursion
+             (when (search-forward ">" nil t)
+               (point)))
      :end (progn
-            (unless (looking-back ">" 1)
-              (sgml-skip-tag-forward 1))
+            (sgml-skip-tag-forward 1)
             (point))
-     :iend (progn (search-backward "<" nil t)
-                  (point))))
+     :iend (progn (when (search-backward "<" nil t)
+                    (point)))))
   :try-next
   (search-forward "<" nil t)
   :try-prev
@@ -2307,7 +2317,7 @@ non-nil the indentation block can contain empty lines."
 
 
 
-(defvar comint-prompt-regexp "^")
+(defvar comint-prompt-regexp)
 (declare-function comint-next-prompt "ext:comint")
 (declare-function comint-previous-prompt "ext:comint")
 (objed-define-object nil output
