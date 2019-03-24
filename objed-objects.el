@@ -3,7 +3,7 @@
 
 ;; Author: Clemens Radermacher <clemera@posteo.net>
 ;; Package-Requires: ((emacs "25") (cl-lib "0.5"))
-;; Version: 0.7.2
+;; Version: 0.8
 ;; Maintainer: Clemens Radermacher <clemera@posteo.net>
 ;; URL: https://github.com/clemera/objed
 
@@ -31,6 +31,7 @@
 (declare-function avy--process "ext:avy")
 (declare-function avy--style-fn "ext:avy")
 (declare-function avy-goto-char "ext:avy")
+(declare-function stripe-buffer-mode "ext:stripe-buffer")
 
 (declare-function sgml-skip-tag-backward "ext:sgml-mode")
 (declare-function sgml-skip-tag-forward "ext:sgml-mode")
@@ -506,6 +507,15 @@ OBJ is the object to use and defaults to `objed--current-obj'."
   "Get right boundary of current object."
   (buffer-substring (objed--iend) (objed--oend)))
 
+(defun objed--object-string ()
+  "Return object string content."
+  (filter-buffer-substring (objed--beg)
+                           (objed--end)))
+
+(defun objed--at-object-p (obj)
+  "Return non nil when point is at object OBJ."
+  (funcall (objed--name2func obj) :atp))
+
 
 (defun objed--goto-char (pos)
   "Move to position POS possibly skipping leading whitespace."
@@ -705,10 +715,14 @@ OBJ defaults to `objed--current-obj'."
           (copy-sequence (cadr obj)))))
 
 (defun objed--get-object (o &optional s)
-  "Get object O with state S."
-  (let ((objed--object o)
-        (objed--obj-state (or s 'whole)))
-    (objed--get)))
+  "Get object O with state S.
+
+When object O is already current return it."
+  (if (eq objed--object o)
+      objed--current-obj
+    (let ((objed--object o)
+          (objed--obj-state (or s 'whole)))
+      (objed--get))))
 
 (defun objed--name2func (name &optional no-mode)
   "Return function name for object with NAME.
@@ -742,12 +756,10 @@ specific versions of object."
   (cond ((memq query '(:try-next :try-prev))
          (condition-case nil
              (funcall objf query)
-           (search-failed
+           ((search-failed end-of-buffer beginning-of-buffer scan-error)
             (error "No %s %s found"
                    (if (eq query :try-next) "next" "previous")
-                   objed--object))
-           ((end-of-buffer beginning-of-buffer scan-error)
-            (ignore))))
+                   objed--object))))
         (t
          (funcall objf query))))
 
@@ -937,6 +949,8 @@ Update `objed--current-obj' to RANGE which defaults to object at
 point. If RANGE is a single item list only update the head of
 current object position data."
   (cond ((null range)
+         (unless objed--object
+           (setq objed--object 'char))
          ;; get current object at point
          (setq objed--current-obj (objed--get)))
         ((and (consp range)
@@ -1423,12 +1437,20 @@ comments."
 
 (objed-define-object nil ace
   :get-obj
-  (avy-goto-char (read-event "Ace to char: "))
-  (objed-make-object
-   :beg (point)
-   :ibeg (point)
-   :end (if (eobp) (point) (1+ (point)))
-   :iend (if (eobp) (point) (1+ (point)))))
+  (let ((stripe (and (bound-and-true-p stripe-buffer-mode)
+                     stripe-buffer-mode)))
+    (when (fboundp 'stripe-buffer-mode)
+      (stripe-buffer-mode 1))
+  ;; TODO: buffer stripes
+    (unwind-protect
+        (objed-make-object
+         :beg (save-excursion (call-interactively 'avy-goto-line)
+                              (line-beginning-position))
+         :end (save-excursion (call-interactively 'avy-goto-line)
+                              (1+ (line-end-position))))
+      (unless (or stripe
+                  (not (fboundp 'stripe-buffer-mode)))
+        (stripe-buffer-mode -1)))))
 
 (objed-define-object nil trailing
   :atp
@@ -2054,6 +2076,8 @@ non-nil the indentation block can contain empty lines."
   (objed--prev-content))
 
 (objed-define-object nil identifier
+  :atp (or (looking-at "\\_<")
+           (looking-back "\\_>" 1))
   :get-obj
   (bounds-of-thing-at-point 'symbol)
   :try-next
@@ -2076,7 +2100,7 @@ non-nil the indentation block can contain empty lines."
           (goto-char (car bds))
           (when (or (eq real-this-command #'objed-next-identifier)
                     (eq real-this-command #'objed-goto-next-identifier))
-            (run-at-time 0 nil (apply-partially #'message "Last one!"))))))))
+            (run-at-time 0 nil (apply-partially #'message "No next identifier"))))))))
 
 (defun objed--prev-identifier ()
   "Move to previous identifier."
@@ -2093,7 +2117,7 @@ non-nil the indentation block can contain empty lines."
             (goto-char (car bds))
             (when (or (eq real-this-command #'objed-prev-identifier)
                       (eq real-this-command #'objed-goto-prev-identifier))
-              (run-at-time 0 nil (apply-partially #'message "First one!")))))))))
+              (run-at-time 0 nil (apply-partially #'message "No previous identifier")))))))))
 
 
 
@@ -2156,6 +2180,11 @@ non-nil the indentation block can contain empty lines."
            (cond ((looking-at "(defun")
                   (down-list 2)
                   (up-list 1)
+                  (objed--skip-ws)
+                  (when (objed--at-string-p)
+                    (forward-sexp 1)
+                    (objed--skip-ws))
+
                   (cons (point)
                         (progn (goto-char (point-max))
                                (down-list -1)
