@@ -3,7 +3,7 @@
 
 ;; Author: Clemens Radermacher <clemera@posteo.net>
 ;; Package-Requires: ((emacs "25") (cl-lib "0.5"))
-;; Version: 0.8
+;; Version: 0.8.1
 ;; Maintainer: Clemens Radermacher <clemera@posteo.net>
 ;; URL: https://github.com/clemera/objed
 
@@ -794,37 +794,6 @@ Position POS defaults to point."
                    (cdr (assq inv buffer-invisibility-spec)))
           (cl-return t))))))
 
-(defun objed--get-next (&optional from)
-  "Get next object from position or object.
-
-If FROM is a position search from there otherwise search starts
-from end of object FROM."
-  (let ((obj (or from objed--current-obj)))
-    (save-excursion
-      (when (and obj (not (objed--no-skipper-p)))
-        (if (integer-or-marker-p obj)
-            (goto-char obj)
-          (goto-char (objed--max obj))))
-      (unless (eobp)
-        (when (<= (point) (objed--beg))
-          (objed--skip-ws))
-        (objed--object :try-next)
-        (objed--get)))))
-
-(defun objed--get-prev (&optional from)
-  "Get previous object from position or object.
-
-If FROM is a position search from there otherwise search starts
-from beginning of object FROM."
-  (let ((obj (or from objed--current-obj)))
-    (save-excursion
-      (when obj
-        (if (integer-or-marker-p obj)
-            (goto-char obj)
-          (goto-char (objed--min obj))))
-      (unless (bobp)
-        (objed--object :try-prev)
-        (objed--get t)))))
 
 
 ;; * Object creation/manipulation
@@ -967,9 +936,59 @@ STATE is the state for the object and defaults to whole. If ODATA
 is non-nil it is used as object position data, otherwise
 calculate the data of the object at current position using
 `objed--get'."
-  (setq objed--object o)
-  (setq objed--obj-state (or state 'whole))
-  (setq objed--current-obj (or odata (objed--get))))
+  (let ((odata (let* ((objed--object o)
+                      (objed--obj-state (or state 'whole))
+                      (tryb t))
+                 (or odata
+                     ;; FIXME: all default objects should throw an error
+                     ;; if try-next, try-prev fails.
+                     (condition-case nil
+                         (or (objed--get)
+                             (setq tryb nil)
+                             (objed--get t))
+                       (error
+                        (when tryb
+                          (ignore-errors (objed--get t)))))))))
+    (if odata
+        (setq objed--object o
+              objed--obj-state (or state 'whole)
+              objed--current-obj odata)
+      (prog1 nil
+        (message "No %s found." o)))))
+
+(defun objed--get-next (&optional from)
+  "Get next object from position or object.
+
+If FROM is a position search from there otherwise search starts
+from end of object FROM."
+  (let ((obj (or from objed--current-obj)))
+    (save-excursion
+      (when (and obj (not (objed--no-skipper-p)))
+        (if (integer-or-marker-p obj)
+            (goto-char obj)
+          (goto-char (objed--max obj))))
+      (unless (eobp)
+        (when (<= (point) (objed--beg))
+          (objed--skip-ws))
+        (ignore-errors
+          (objed--object :try-next)
+          (objed--get))))))
+
+(defun objed--get-prev (&optional from)
+  "Get previous object from position or object.
+
+If FROM is a position search from there otherwise search starts
+from beginning of object FROM."
+  (let ((obj (or from objed--current-obj)))
+    (save-excursion
+      (when obj
+        (if (integer-or-marker-p obj)
+            (goto-char obj)
+          (goto-char (objed--min obj))))
+      (unless (bobp)
+        (ignore-errors
+        (objed--object :try-prev)
+        (objed--get t))))))
 
 
 (defun objed--distant-p (o)
@@ -1437,20 +1456,30 @@ comments."
 
 (objed-define-object nil ace
   :get-obj
-  (let ((stripe (and (bound-and-true-p stripe-buffer-mode)
-                     stripe-buffer-mode)))
-    (when (fboundp 'stripe-buffer-mode)
-      (stripe-buffer-mode 1))
-  ;; TODO: buffer stripes
-    (unwind-protect
-        (objed-make-object
-         :beg (save-excursion (call-interactively 'avy-goto-line)
-                              (line-beginning-position))
-         :end (save-excursion (call-interactively 'avy-goto-line)
-                              (1+ (line-end-position))))
-      (unless (or stripe
-                  (not (fboundp 'stripe-buffer-mode)))
-        (stripe-buffer-mode -1)))))
+  (unless (eq objed--object 'ace-object)
+    (let ((stripe (and (bound-and-true-p stripe-buffer-mode)
+                       stripe-buffer-mode)))
+      (when (fboundp 'stripe-buffer-mode)
+        (stripe-buffer-mode 1))
+      (unwind-protect
+          (objed-make-object
+           :beg (save-excursion
+                  (call-interactively 'avy-goto-line)
+                  ;; indicate input
+                  (redisplay)
+                  (line-beginning-position))
+           :end (save-excursion
+                  (when (fboundp 'stripe-buffer-mode)
+                    (stripe-buffer-mode 1))
+                  (call-interactively 'avy-goto-line)
+                  (1+ (line-end-position))))
+        (unless (or stripe
+                    (not (fboundp 'stripe-buffer-mode)))
+          (stripe-buffer-mode -1)))))
+  :try-next
+  (user-error "Not possible")
+  :try-prev
+  (user-error "Not possible"))
 
 (objed-define-object nil trailing
   :atp
@@ -1646,13 +1675,13 @@ comments."
                                (and "." (* alnum))))
                        nil t))
 
-(objed-define-object nil mail
+(objed-define-object nil email
   :get-obj
   (bounds-of-thing-at-point 'email)
   :try-next
-  (re-search-forward  "@")
+  (re-search-forward "[a-z]@[a-z]")
   :try-prev
-  (re-search-backward  "@"))
+  (re-search-backward "[a-z]@[a-z]"))
 
 (objed-define-object nil url
   :get-obj

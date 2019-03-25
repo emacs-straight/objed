@@ -3,7 +3,7 @@
 
 ;; Author: Clemens Radermacher <clemera@posteo.net>
 ;; Package-Requires: ((emacs "25") (cl-lib "0.5"))
-;; Version: 0.8
+;; Version: 0.8.1
 ;; Keywords: convenience
 ;; URL: https://github.com/clemera/objed
 
@@ -923,7 +923,7 @@ To define new operations see `objed-define-op'.")
 
     (define-key map "t" 'objed-tag-object)
     (define-key map "f" 'objed-file-object)
-    (define-key map "m" 'objed-mail-object)
+    (define-key map "m" 'objed-email-object)
     (define-key map "u" 'objed-url-object)
 
     (define-key map "*" 'objed-section-object)
@@ -1230,13 +1230,13 @@ or object position data."
   ;; if anything went wrong make sure to start with clean state
   (when objed--buffer
     (objed--reset))
-  ;; (unless objed--buffer
-  (setq objed--current-obj nil)
-  (setq objed--obj-state 'whole)
 
+  ;; (setq objed--current-obj nil)
+  ;; (setq objed--obj-state 'whole)
   (setq objed--buffer (current-buffer))
   (add-hook 'pre-command-hook 'objed--push-state nil t)
   (add-hook 'post-command-hook 'objed--check-buffer)
+
   (pcase-dolist
       (`(,var . ,val)
        `((hl-line-range-function . objed-hl-function)
@@ -1853,7 +1853,9 @@ Switches to inner object or object inside current one."
       (save-excursion
         (objed-context-object))
     (if (objed--inner-p)
-        (objed--switch-to 'sexp)))
+        (save-excursion
+          (goto-char (objed--end))
+          (objed--switch-to 'sexp))))
   (let ((sdiff (abs (- (point) (objed--beg))))
         (ediff (abs (- (point) (objed--end)))))
     (objed--reverse)
@@ -1871,6 +1873,8 @@ object point is at. Any whitespace following point is skipped.
 
 On expand move to start of object."
   (interactive)
+  (unless objed--buffer
+    (objed--init 'char))
   (if (objed--basic-p)
       (let ((pos (point)))
         (save-excursion
