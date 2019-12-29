@@ -1,4 +1,4 @@
-hhhhh
+vvvvvv
 ;;;;
 
 (defun check ()
@@ -10,7 +10,6 @@ hhhhh
 ;; and |more text
 
 ;;;;
-
 |<
 (defun check ()
   (ignore))
@@ -21,3 +20,5 @@ hhhhh
 ;; and more text
 
 >
+
+

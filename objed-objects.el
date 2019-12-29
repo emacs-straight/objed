@@ -27,6 +27,8 @@
 
 ;; * Bytecomp
 
+(require 'subword)
+
 ;; info for byte-comp
 (declare-function avy--process "ext:avy")
 (declare-function avy--style-fn "ext:avy")
@@ -66,38 +68,137 @@
 
 
 (eval-and-compile
-  (defun objed--transform-pos-data (plist)
-  (let ((np nil)
-        (alt nil)
-        (make nil)
-        (skip nil))
-    (unless (and (plist-get plist :beg)
-                 (plist-get plist :end))
-      (user-error "Malformed macro"))
-    (dolist (item plist)
-      (if (memq item '(:beg :ibeg :end :iend))
-          (progn (push item alt)
-                 (setq skip t))
-        (if (and skip
-                 (not (keywordp item)))
-            (push item alt)
-          (push item np)
-          (setq skip nil))))
+  (require 'rx)
+  (defun objed--get-regex-object (bregex eregex)
+    "Return regex object between BREGEX and EREGEX.
 
-    (setq np (nreverse np))
-    (setq alt (nreverse alt))
-    (dolist (el alt)
-      (when (keywordp el)
-        (progn
-          (push el make)
-          (push (plist-get alt el) make))))
-    (setq make (nreverse make))
-    (push 'objed-make-object make)
-    (append np (list :get-obj)
-            ;; TODO:save-mark-and-excursion still needed?
-            ;; is wrapped already?
-            (list (append (list 'save-mark-and-excursion)
-                          (list make))))))
+The inner object part will be the text between the matches for
+those two expressions.
+
+BREGEX is the regular expression for the start of the object. If
+the regular expressions contains a group, any text which is part
+of this group will belong to the inner object part.
+
+EREGEX is the regular expression for the end of the object. If
+the regular expressions contains a group, any text which is part
+of this group will belong to the inner object part.
+
+EREGEX can also be an empty string. In this case objects are
+separated by the BREGEX expression and reach until the next one
+or until the buffer end if no next instance can be found."
+    (let* ((obounds ())
+           (ibounds ())
+           (opos (point)))
+      (save-mark-and-excursion
+        ;; try to move into object when at boundary
+        (if (looking-at bregex)
+            (goto-char (or (match-end 1)
+                           (match-end 0)))
+          (if (looking-back eregex (line-beginning-position))
+              (goto-char (or (match-beginning 1)
+                             (match-beginning 0)))
+            (re-search-forward eregex nil t)
+            (goto-char (or (match-beginning 1)
+                           (match-beginning 0)))))
+        (when (and ;; goto possible start
+               (re-search-backward bregex nil t)
+               (push (or (match-beginning 1)
+                         (match-end 0))
+                     ibounds)
+               (push (match-beginning 0)
+                     obounds)
+               ;; goto possible end
+               (goto-char (or (match-end 1)
+                              (match-end 0)))
+               (cond ((string= "" eregex)
+                      ;; no end provided, objects are separated by beginning
+                      ;; regex
+                      (cond ((re-search-forward bregex nil t)
+                             (push (match-beginning 0) obounds)
+                             ;; no way to tell so just skip ws
+                             ;; to have a sensible default
+                             (goto-char (car obounds))
+                             (objed--skip-ws t)
+                             (push (point) ibounds))
+                            (t
+                             ;; if there is no match that means the buffer is
+                             ;; the object end
+                             (goto-char (point-max))
+                             (push (point) obounds)
+                             (objed--skip-ws t)
+                             (push (point) ibounds))))
+                     (t
+                      (re-search-forward eregex nil t)
+                      (push (or (match-end 1)
+                                (match-beginning 0))
+                            ibounds)
+                      (push (match-end 0)
+                            obounds)))
+               ;; when point was within start and end
+               (<= (cadr obounds) opos (car obounds)))
+          (list (nreverse obounds)
+                (nreverse ibounds))))))
+
+  (defun objed--transform-pos-data (plist)
+    (cond  ((and (plist-get plist :beg)
+                 (or (plist-get plist :end)
+                     (stringp (plist-get plist :beg))))
+            (let ((np nil)
+                  (alt nil)
+                  (skip nil))
+              ;; filter :beg :end keywords
+              (dolist (item plist)
+                (if (memq item '(:beg :ibeg :end :iend))
+                    (progn (push item alt)
+                           (setq skip t))
+                  (if (and skip
+                           (not (keywordp item)))
+                      (push item alt)
+                    (push item np)
+                    (setq skip nil))))
+              ;; new and alternate plists
+              (setq np (nreverse np))
+              (setq alt (nreverse alt))
+
+              ;; merge ... :get-obj "regex search"
+              (if (and (stringp (plist-get plist :beg))
+                       (or (stringp (plist-get plist :end))
+                           (not (plist-get plist :end))))
+                  (let ((bregex (plist-get plist :beg))
+                        (eregex (or (plist-get plist :end)
+                                    "")))
+                    (append np
+                            (list :try-prev)
+                            (if (string= "" eregex)
+                                (list `(when (re-search-backward ,bregex)
+                                         (goto-char (match-end 0))))
+                                (list `(when (re-search-backward ,eregex)
+                                     (goto-char (match-beginning 0)))))
+                            (list :try-next)
+                            (list `(when (re-search-forward ,bregex)
+                                         (goto-char (match-end 0))))
+                            (list :get-obj)
+                            (list
+                             `(objed--get-regex-object ,bregex
+                                                       ,eregex))))
+                ;; merge ... :get-obj (objed-make-object :beg ... :end...)
+                (let ((make nil))
+                  (dolist (el alt)
+                    (when (keywordp el)
+                      (progn
+                        (push el make)
+                        (push (plist-get alt el) make))))
+                  (setq make (nreverse make))
+                  (push 'objed-make-object make)
+                  (append np
+                          (list :get-obj)
+                          ;; TODO:save-mark-and-excursion still needed?
+                          ;; is wrapped already?
+                          (list (append (list 'save-mark-and-excursion)
+                                        (list make))))))))
+           (t
+            (user-error "Malformed macro"))))
+
 
   (defun objed--get-arg-plist (keylst valid &optional wrapped)
     "Wraps any forms of keys in keylst in `progn' and returns property list.
@@ -116,18 +217,28 @@ property list where each key has an associated progn."
                (push (pop keylst) forms))
              (push keyw wrapped)
              ;; allowed to move point
-             (if (memq vkeyw '(:try-next :try-prev :ref))
-                 (push `(let ((objed--block-p t)) ,@(nreverse forms))
-                       wrapped)
-               (if (memq vkeyw '(:beg :end :ibeg :iend))
-                   (push `(let ((objed--block-p t))
-                            ,@(nreverse forms))
-                         wrapped)
-                 ;; objed--block-p: dont run objeds advices here...
-                 (push `(let ((objed--block-p t))
-                          (save-mark-and-excursion
-                           ,@(nreverse forms)))
-                       wrapped)))
+             (cond ((memq vkeyw '(:try-next :try-prev :ref))
+                    (push `(let ((objed--block-p t))
+                             ,@(nreverse forms))
+                          wrapped))
+                   ((memq vkeyw '(:beg :end :ibeg :iend))
+                    (if (and (not (cdr forms))
+                             (stringp (car forms)))
+                        (push (car forms) wrapped)
+                      (if (and (not (cdr forms))
+                               (eq (caar forms) 'rx))
+                          (push (macroexpand-1 (car forms))
+                                wrapped)
+                        (push `(let ((objed--block-p t))
+                                 ,@(nreverse forms))
+                              wrapped))))
+                   (t
+                    ;; objed--block-p: dont run objeds advices here
+                    (push `(let ((objed--block-p t))
+                             (save-mark-and-excursion
+                               ,@(nreverse forms)))
+                          wrapped)))
+
              (objed--get-arg-plist keylst valid wrapped))
             (keylst
              (error "Malformed Object. Keyword %s not recognized" keyw))
@@ -143,9 +254,15 @@ Usage:
   (objed-define-object package name
      [:keyword [code-form]...]...)
 
+
+This macro creates a command named objed-<name>-object. This
+command can be used to activate objed for the defined object and
+is used internally to query for information needed for objed
+commands.
+
 PACKAGE is the name of the package the object should be loaded
-for. If nil you are defining a default object and need to add a
-binding in variable `objed-object-map' for the object command.
+for. If non-nil this will defer loading until PACKAGE is
+available.
 
 NAME is a symbol which defines the name which will be used to
 refer to this object. ARGS is a list of keyword arguments and
@@ -168,9 +285,16 @@ there is no object at point the code should return nil.
 :beg, :ibeg, :end, :iend
 
 These keywords can be used instead of :get-obj above. The value
-for each is the code to run which should return point position
-for corresponding keyword. Point is allword to move. The code
-runs in the same order the keywords are provided.
+for each is the code to run which should return the point
+position corresponding to the keyword. Point is allword to move
+between the keyword expression. The code runs in the same order
+the keywords are provided.
+
+It is also possible to use only :beg and :end with regular
+expressions to define an object. See `objed--get-regex-object'
+for details of their format. If :end is omitted the regexp
+provided by :beg separates the objects on its own. This can be
+used for text objects which don't have an end marker.
 
 :try-next (optional)
 
@@ -191,11 +315,11 @@ throw an error.
 
 :mode (optional)
 
-Object defintions which don't use this keyword apply to all
-modes. If given it should be a symbol of a `major-mode'. Any
-keyword definitions used for this object will then override the
-default ones when in this mode. Keywords not used fallback to use
-the general definition.
+Object defintions which use this keyword derive from an already
+existing object with the same NAME. If given it should be a
+symbol of a `major-mode'. Any keyword definitions of the mode
+specific version will override the ones from the non mode
+specific version.
 
 :atp (optional)
 
@@ -303,7 +427,9 @@ defined."
                    res)
              (nreverse res)))
           (t
-           (let ((res (list 'progn)))
+           (let ((res (if package
+                          (list `',package 'with-eval-after-load)
+                        (list 'progn))))
 
              (when noskip
                (push `(put ',fname 'objed-no-skip t)
@@ -317,6 +443,72 @@ defined."
                       (cond ,@(nreverse cbody)))
                    res)
              (nreverse res))))))
+
+
+(defun objed--define-kpair (map key name)
+  (let ((cmd (objed--name2func name 'nomode)))
+    (define-key map key cmd)))
+
+(defun objed-define-global-object-keys (&rest kpairs)
+  "Define global object keys.
+
+KPAIRS are pairs of the key and the object name."
+  (let ((map (default-value 'objed-object-map)))
+    (while kpairs
+      (objed--define-kpair map (pop kpairs) (pop kpairs)))))
+
+(defun objed-define-local-object-keys (&rest kpairs)
+  "Define object keys locally for current buffer.
+
+This function is intended to be used inside mode hooks to add
+mode specific object bindings to the currently existing ones. If
+you want to replace the object key bindings entirely with local
+ones see `objed-define-local-object-keys*'.
+
+KPAIRS are pairs of the key and the object name."
+  (unless (local-variable-p 'objed-map)
+    (setq-local objed-map
+                (make-composed-keymap nil (default-value 'objed-map))))
+  (unless (local-variable-p 'objed-object-map)
+    (setq-local objed-object-map
+                (make-composed-keymap nil (default-value 'objed-object-map))))
+  (while kpairs
+    (objed--define-kpair objed-object-map (pop kpairs) (pop kpairs)))
+  (let ((switchk (where-is-internal (default-value 'objed-object-map)
+                                    (default-value 'objed-map) t)))
+    (define-key objed-map switchk objed-object-map)))
+
+
+(defun objed--init-local-map (lmap map)
+  "Initilize local LMAP to shadow bindings in MAP."
+  (map-keymap (lambda (ev def)
+                (if (keymapp def)
+                    (objed--init-local-map lmap def)
+                  (define-key lmap (vector ev) nil)))
+              map))
+
+(defun objed-define-local-object-keys* (&rest kpairs)
+  "Define object keys locally for current buffer.
+
+This function is intended to be used inside mode hooks and
+creates new object key bindings for the current buffer. This
+means any previous object key bindings bindings are replaced by
+the bindings defined in KPAIRS.
+
+If you only want to add or change a few mode specific bindings
+see `objed-define-local-object-keys'.
+
+KPAIRS are pairs of the key and the object name."
+  (unless (local-variable-p 'objed-map)
+    (setq-local objed-map
+                (make-composed-keymap nil (default-value 'objed-map))))
+  (setq-local objed-object-map (make-sparse-keymap))
+  (objed--init-local-map objed-object-map (default-value 'objed-map))
+  (while kpairs
+    (objed--define-kpair objed-object-map (pop kpairs) (pop kpairs)))
+  (let ((switchk (where-is-internal (default-value 'objed-object-map)
+                                    (default-value 'objed-map) t)))
+    (define-key objed-map switchk objed-object-map)))
 
 
 (defmacro objed--with-narrow-for-text (&rest body)
@@ -341,7 +533,7 @@ Positions are stored in a list of the form:
     ((object-start object-end)
      (inner-start inner-end))")
 
-(defvar objed--obj-state nil
+(defvar-local objed--obj-state nil
   "The state used to get object positions.
 
 Either the symbol `whole' or `inner'.")
@@ -350,7 +542,7 @@ Either the symbol `whole' or `inner'.")
 (defvar objed--marked-ovs nil
   "List of overlays of marked objects.")
 
-;; * Get object positions
+;; * Internal object access functions
 
 (defun objed--inside-object-p (obj)
   "Return non-nil if point point inside object OBJ."
@@ -362,7 +554,6 @@ Either the symbol `whole' or `inner'.")
     (when (and obj (not (objed--distant-p obj)))
       obj)))
 
-
 (defun objed--beg (&optional obj)
   "Get beginning position of object.
 
@@ -371,7 +562,6 @@ defaults to `objed--current-obj'."
   (let ((obj (or obj objed--current-obj)))
     (caar obj)))
 
-
 (defun objed--end (&optional obj)
   "Get end position of object.
 
@@ -379,6 +569,18 @@ Ignores current object state. OBJ is the object to use and
 defaults to `objed--current-obj'."
   (let ((obj (or obj objed--current-obj)))
     (cadr (car obj))))
+
+(defun objed--object-at-point (obj &optional state)
+  "Return object data for OBJ and STATE a point.
+
+Does return nil when there is no such object."
+  (let* ((objed--object obj)
+         (objed--obj-state (or state 'whole))
+         (o (ignore-errors (objed--object :get-obj))))
+    (when o
+      (if (eq state 'inner)
+          (nreverse o)
+        o))))
 
 (defun objed--other (&optional obj)
   "Return object position opposite to point.
@@ -405,13 +607,21 @@ OBJ is the object to use and defaults to `objed--current-obj'."
   (let ((obj (or obj objed--current-obj)))
     (objed--apply #'max obj)))
 
+(defvar objed--basic-objects
+  '(sexp line identifier word char region buffer)
+  "Basic objects.
+
+Basic object are objects which have no next/previous or which
+have their own movement commands.")
+
+
 (defun objed--basic-p ()
   "Return non-nil if current object is a basic object.
 
 From basic objects `objed' starts expanding to context objects.
 Thus this should be objects which have their own movement
 commands."
-  (memq objed--object '(sexp line identifier word char region buffer)))
+  (memq objed--object objed--basic-objects))
 
 (defun objed--current (&optional obj)
   "Get the current range of interest.
@@ -428,6 +638,7 @@ otherwise the its the head of object OBJ which defaults to
                         (region-end)))))
           (t
            (car obj)))))
+
 
 (defun objed--bounds (&optional obj)
   "Get the current object bounds.
@@ -524,13 +735,18 @@ OBJ is the object to use and defaults to `objed--current-obj'."
        pos
      (objed--skip-forward pos 'ws))))
 
-(defun objed--collect-backward (pos min &optional ends)
+(defun objed--collect-backward (pos min &optional collf)
   "Collect object positions in backward direction.
 
-Start from position POS and stop at MIN position. The resulting
-list contains cons cells of the start positions of the objects
-and the current window. If ENDS is non-nil collect end positions
-instead."
+Start from position POS and stop at MIN position.
+
+The returned list contains cons cells of the start positions of
+the objects and the current window. If COLLF is t collect the
+end positions instead. Leading or trailing ws are ignored by
+default.
+
+If COLLF is function it recieves the object as argument and
+should return the data to collect."
   (let ((cw (get-buffer-window))
         (sobj nil)
         (posns nil)
@@ -543,20 +759,30 @@ instead."
                   (not (equal obj sobj)))
         (setq sobj obj)
         (goto-char (setq pos (objed--beg obj)))
-        (push (cons (if ends
-                        (objed--skip-backward
-                         (objed--max obj) 'ws)
-                      (objed--skip-forward pos 'ws))
-                    cw)
-              posns))
+        (cond ((and collf
+                    (not (eq collf t)))
+               (push (funcall collf obj) posns))
+              (t
+               (push (cons (if (eq collf t)
+                               (objed--skip-backward
+                                (objed--max obj) 'ws)
+                             (objed--skip-forward pos 'ws))
+                           cw)
+                     posns))))
       posns)))
 
-(defun objed--collect-forward (pos max)
+(defun objed--collect-forward (pos max &optional collf)
   "Collect object positions in forward direction.
 
-Start from position POS and stop at MAX position. The resulting
-list contains cons cells of the start positions of the objects
-and the current window."
+Start from position POS and stop at MAX position.
+
+The returned list contains cons cells of the start positions of
+the objects and the current window. If COLLF is t collect the
+end positions instead. Leading or trailing ws are ignored by
+default.
+
+If COLLF is function it recieves the object as argument and
+should return the data to collect."
   (let ((cw (get-buffer-window))
         (sobj nil)
         (posns nil)
@@ -570,10 +796,16 @@ and the current window."
         (setq sobj obj)
         (if (objed--no-skipper-p)
             (goto-char (setq pos (objed--beg obj)))
-        (goto-char (setq pos (objed--end obj))))
-        (push (cons (objed--skip-forward (objed--beg obj) 'ws)
-                    cw)
-              posns)))
+          (goto-char (setq pos (objed--end obj))))
+        (cond ((and collf  (not (eq collf t)))
+               (push (funcall collf obj) posns))
+              (t
+               (push (cons (if (eq collf t)
+                               (objed--skip-backward
+                                (objed--max obj) 'ws)
+                             (objed--skip-forward (objed--beg obj) 'ws))
+                           cw)
+                     posns)))))
     (setq posns (nreverse posns))))
 
 (defun objed--no-skipper-p ()
@@ -581,7 +813,7 @@ and the current window."
   (get (objed--name2func objed--object)
        'objed-no-skip))
 
-(defun objed--collect-object-positions (beg end &optional fromp)
+(defun objed--collect-object-positions (beg end &optional fromp collf)
   "Collect object positions.
 
 Returns object positions between BEG and END.
@@ -589,16 +821,42 @@ Returns object positions between BEG and END.
 If FROMP is non-nil collect from that position otherwise collect before
 and after current object.
 
-The resulting list contains cons cells of the start positions of
-the objects and the current window."
-  (append (objed--collect-backward
-           (or fromp (objed--min))
-           beg)
-          (objed--collect-forward
-           (or fromp (if (objed--no-skipper-p)
-                         (objed--min) (objed--max)))
-           end)))
+By default the returned list contains cons cells of the start
+positions of the objects and the current window.
 
+COLLF has the same meaning as for `objed--collect-forward' and
+`objed--collect-backward'."
+  (save-restriction
+    (narrow-to-region beg end)
+    (append (objed--collect-backward
+             (or fromp (objed--min))
+             beg collf)
+            (objed--collect-forward
+             (or fromp (if (objed--no-skipper-p)
+                           (objed--min) (objed--max)))
+             end collf))))
+
+(defun objed--map (fun &optional obj beg end)
+  "Call FUN with object data for each object of current type.
+
+Return a list of the results.
+
+If OBJ is on-nil it should be the symbol of the object type to
+search for. By default search the whole buffer, alternatively
+provide BEG and END position for region to search."
+  (let ((objed--object (or obj objed--object)))
+    (objed--collect-object-positions
+     (or beg (point-min))
+     (or end (point-max))
+     (point) fun)))
+
+(defun objed--objects (&optional obj beg end)
+  "Return list of all objects of current type.
+
+If OBJ is on-nil it should be the symbol of the object type to
+search for. By default search the whole buffer, alternatively
+provide BEG and END position for region to search."
+  (objed--map #'identity obj beg end))
 
 (defun objed--collect-object-lines ()
   "Collect first lines of objects before and after current object.
@@ -694,9 +952,13 @@ objects can throw an error."
                  (let ((f (if dir  '> '<))
                        (step (if dir -1 1)))
                    (unless (funcall stop)
-                     (forward-char step)
                      (let ((pos (point)))
                        (objed--object darg)
+                       ;; if point has not moved
+                       ;; fallback to move one char
+                       ;; in right direction
+                       (when (= (point) pos)
+                         (forward-char step))
                        ;; check for valid move direction to avoid inf. loop if
                        ;; the code of object misbehaves
                        (when (funcall f (point) pos)
@@ -794,9 +1056,42 @@ Position POS defaults to point."
                    (cdr (assq inv buffer-invisibility-spec)))
           (cl-return t))))))
 
+;; * Public access functions for objects
+
+(defun objed-bounds-at-point (obj &optional state)
+  "Return beg and end position of object at point.
+
+The positions are returned as a cons: (beg . end). OBJ is a
+symbol of a known object. STATE is either `whole' or `inner' and
+defaults to `whole'.
+
+Does return nil when there is no such object at point."
+  (let ((o (objed--object-at-point obj state)))
+    (when o
+      (cons (objed--beg o)
+            (objed--end o)))))
+
+
+(defun objed-bounds-at (pos obj &optional state)
+  "Return beg and end position of object at POS.
+
+The positions are returned as a cons: (beg . end). OBJ is a
+symbol of a known object. STATE is either `whole' or `inner' and
+defaults to `whole'.
+
+Does return nil when there is no such object at point."
+  (save-excursion
+    (goto-char pos)
+    (objed-bounds-at-point obj state)))
 
 
 ;; * Object creation/manipulation
+
+(defun objed-make-empty-object (&optional pos)
+  "Return an empty object at POS which default to point."
+  (let ((pos (or pos (point))))
+    (list (list pos pos)
+          (list pos pos))))
 
 
 (cl-defun objed-make-object (&key obounds beg end ibounds ibeg iend)
@@ -929,6 +1224,21 @@ current object position data."
          (setq objed--current-obj range))))
 
 
+(defun objed--markify-current-object ()
+  "Convert current object into marker object."
+  (unless (markerp (objed--beg))
+    (objed--update-current-object
+     (objed-make-object
+      :ibeg (set-marker (make-marker)
+                        (objed--ibeg))
+      :beg (set-marker (make-marker)
+                       (objed--obeg))
+      :iend (set-marker (make-marker)
+                        (objed--iend))
+      :end (set-marker (make-marker)
+                       (objed--oend))))))
+
+
 (defun objed--switch-to (o &optional state odata)
   "Switch to object O.
 
@@ -968,8 +1278,9 @@ from end of object FROM."
             (goto-char obj)
           (goto-char (objed--max obj))))
       (unless (eobp)
-        (when (<= (point) (objed--beg))
-          (objed--skip-ws))
+        (when (and (not (number-or-marker-p from))
+                   (<= (point) (objed--beg obj)))
+            (objed--skip-ws))
         (ignore-errors
           (objed--object :try-next)
           (objed--get))))))
@@ -1098,12 +1409,12 @@ OBJ defaults to `objed--current-obj'."
   "Move to the next object.
 
 With postitive prefix argument ARG move to the nth next object."
-  (let ((arg (or arg 1)))
-    (dotimes (_ arg)
-      (let ((obj (objed--get-next)))
-        (when obj
-          (objed--update-current-object obj)
-          (objed--goto-char (objed--beg obj)))))))
+  (let ((arg (or arg 1))
+        (obj nil))
+    (dotimes (_ arg obj)
+      (when (setq obj  (objed--get-next))
+        (objed--update-current-object obj)
+        (objed--goto-char (objed--beg obj))))))
 
 
 (defun objed--goto-previous (&optional arg)
@@ -1111,12 +1422,12 @@ With postitive prefix argument ARG move to the nth next object."
 
 With postitive prefix argument ARG move to the nth previous
 object."
-  (let ((arg (or arg 1)))
-    (dotimes (_ arg)
-      (let ((obj (objed--get-prev)))
-        (when obj
-          (objed--update-current-object obj)
-          (objed--goto-char (objed--beg obj)))))))
+  (let ((arg (or arg 1))
+        (obj nil))
+    (dotimes (_ arg obj)
+      (when (setq obj (objed--get-prev))
+        (objed--update-current-object obj)
+        (objed--goto-char (objed--beg obj))))))
 
 (defun objed--make-object-overlay (&optional obj)
   "Create an overlay to mark current object.
@@ -1134,6 +1445,7 @@ Uses FACE `objed-mark' by default. If KEEP is non-nil keep
 overlays without content."
   (let ((ov (make-overlay beg end)))
     (overlay-put ov 'objed t)
+    (overlay-put ov 'objed--object objed--object)
     (overlay-put ov 'face (or face 'objed-mark))
     (overlay-put ov 'evaporate (not keep))
     (overlay-put ov 'rear-nonsticky t)
@@ -1420,8 +1732,9 @@ comments."
   (let* ((bounds nil)
          (ibounds (cond ((setq bounds (objed--bounds-of-string-at-point))
                          (objed--inner-string bounds))
-                       ((setq bounds (objed--bounds-of-comment-at-point))
-                        (objed--inner-comment-block)))))
+                        ((setq bounds (objed--bounds-of-comment-at-point))
+                         ;; include trailing ws
+                         (objed--comment-block)))))
     (when ibounds
       (narrow-to-region (car ibounds) (cdr ibounds)))))
 
@@ -1434,6 +1747,31 @@ comments."
               (nth 4 sp))
       begin)))
 
+(defvar align-region-separate)
+(defvar align-mode-rules-list)
+(defvar align-rules-list)
+(defvar align-exclude-rules-list)
+(defvar align-mode-exclude-rules-list)
+(declare-function align-region "ext:align")
+(defun objed--get-align-sections ()
+  "Get region bounds of align sections."
+  (require 'align)
+  (let ((separator
+         (or (if (and (symbolp align-region-separate)
+                      (boundp align-region-separate))
+                 (symbol-value align-region-separate)
+               align-region-separate)
+             'entire))
+        (regions ()))
+    (align-region nil nil separator
+                  (or align-mode-rules-list align-rules-list)
+                  (or align-mode-exclude-rules-list align-exclude-rules-list)
+                  (lambda (beg end mode)
+                    (when (consp mode)
+                      (push (cons beg end)
+                            regions))))
+    regions))
+
 
 ;; * Object definitions
 
@@ -1442,11 +1780,10 @@ comments."
   :atp
   (looking-at ".")
   :get-obj
-  (objed-make-object
-   :beg (point)
-   :ibeg (point)
-   :end (if (eobp) (point) (1+ (point)))
-   :iend (if (eobp) (point) (1+ (point))))
+  (if (eobp)
+      (objed-make-empty-object)
+    (objed-make-object :beg (point)
+                       :end (1+ (point))))
   :try-next
   ;; current one is skipped, for chars this means we are already at
   ;; the next..
@@ -1514,6 +1851,20 @@ comments."
   :try-prev
   (search-backward " " nil t))
 
+
+(defun objed--inner-word-bounds ()
+  "Return bounds of subword at point."
+  (let* ((subword-mode t)
+         (superword-mode nil)
+         (find-word-boundary-function-table
+          subword-find-word-boundary-function-table))
+    (if (eq this-command 'forward-word)
+        (save-excursion
+          (forward-word -1)
+          (bounds-of-thing-at-point 'word))
+      (bounds-of-thing-at-point 'word))))
+
+
 (objed-define-object nil word
   :atp
   (looking-at "\\<")
@@ -1522,11 +1873,34 @@ comments."
                (bounds-of-thing-at-point 'symbol))
     'identifier)
   :get-obj
-  (bounds-of-thing-at-point 'word)
+  (if (eobp)
+      (objed-make-empty-object)
+    (if (objed--inner-p)
+        ;; don't confuse objed-next/prev which
+        ;; use the outer bounds for navigation
+        ;; but a word can contain multiple innner words
+        (objed-make-object
+         :obounds (objed--inner-word-bounds))
+      (objed-make-object
+         :obounds (bounds-of-thing-at-point 'word)
+         :ibounds (objed--inner-word-bounds))))
   :try-next
-  (re-search-forward  "\\<." nil t)
+  (if (objed--inner-p)
+      (let* ((subword-mode t)
+             (superword-mode nil)
+             (find-word-boundary-function-table
+              subword-find-word-boundary-function-table))
+        (forward-word 1)
+        (forward-word -1))
+    (re-search-forward  "\\<." nil t))
   :try-prev
-  (re-search-backward  ".\\>" nil t))
+  (if (objed--inner-p)
+      (let* ((subword-mode t)
+             (superword-mode nil)
+             (find-word-boundary-function-table
+              subword-find-word-boundary-function-table))
+        (forward-word -1))
+    (re-search-backward  ".\\>" nil t)))
 
 
 (defun objed--next-symbol ()
@@ -1566,33 +1940,59 @@ comments."
   (objed--prev-symbol))
 
 
+(objed-define-object nil subword
+  :get-obj
+  (objed--inner-word-bounds)
+  :try-next
+  (let* ((subword-mode t)
+         (superword-mode nil)
+         (find-word-boundary-function-table
+          subword-find-word-boundary-function-table))
+    (forward-word 1)
+    (forward-word -1))
+  :try-prev
+  (let* ((subword-mode t)
+         (superword-mode nil)
+         (find-word-boundary-function-table
+          subword-find-word-boundary-function-table))
+    (forward-word -1)))
+
+
 
 (defun objed--at-sexp-p ()
   "Return sexp object if point at strutured expression."
-  (let ((opos (point))
-        (real-this-command 'forward-sexp))
-    (save-excursion
-      (cl-flet ((zigzag
-                 (arg)
-                 (ignore-errors
-                   (forward-sexp arg)
-                   (unless (eq opos (point))
-                     (prog1 (point)
-                       (forward-sexp (- arg)))))))
-        (let ((zigp nil))
-          (when (or (and (not (eobp))
-                         (or (memq (char-syntax (char-before)) (list ?\s ?>))
-                             (not (eq (char-syntax (char-after)) ?\")))
-                         (save-excursion
-                           (eq (point) (progn (setq zigp (zigzag 1))
-                                              (point)))))
-                    (and (not (bobp))
-                         (save-excursion
-                           (eq (point) (progn (setq zigp (zigzag -1))
-                                              (point))))))
-            (and zigp
-                 (cons (min (point) zigp)
-                       (max (point) zigp)))))))))
+  (let* ((opos (point))
+         (objed--block-p t)
+         (real-this-command 'forward-sexp)
+         (instring (objed--in-string-p nil t))
+         (other nil)
+         (atp (or (when (or (bobp)
+                            ;; prevent the annoying "feature" that sexp
+                            ;; movement works across strings
+                            (not instring)
+                            (not (eq (char-syntax (char-after)) ?\")))
+                    (save-excursion
+                      (ignore-errors
+                        (forward-sexp 1)
+                        (setq other (point))
+                        (forward-sexp -1)
+                        (= (point) opos))))
+                  (when (or (eobp)
+                            ;; prevent the annoying "feature" that sexp
+                            ;; movement works across strings
+                            (not instring)
+                            (not (eq (char-syntax (char-before)) ?\")))
+                    (save-excursion
+                         (ignore-errors
+                           (forward-sexp -1)
+                           (setq other (point))
+                           (forward-sexp 1)
+                           (= (point) opos)))))))
+
+    (when atp
+      (cons (min opos other)
+            (max opos other)))))
+
 
 (objed-define-object nil sexp
   :atp
@@ -1611,22 +2011,21 @@ comments."
       'identifier))
   :get-obj
   (let ((bounds (or (objed--at-sexp-p)
-                    (ignore-errors
-                      (forward-sexp -1)
-                      (objed--at-sexp-p)))))
+                    ;; for commands which are not symetric
+                    ;; like C-M-f at beg of python funtions
+                    (save-excursion
+                      (ignore-errors
+                        (let* ((pos (point))
+                               (real-this-command 'forward-sexp))
+                          (forward-sexp 1)
+                          (when (/= pos (point))
+                            (cons pos
+                                  (point)))))))))
     (when bounds
       (objed-make-object
        :obounds bounds
-       :ibounds (when bounds
-                  (goto-char (car bounds))
-                  ;; include leading punctuation
-                  (skip-syntax-forward ".'")
-                  (let ((beg (point)))
-                    (goto-char (cdr bounds))
-                    (with-syntax-table text-mode-syntax-table
-                      (skip-syntax-backward "."))
-                    (skip-syntax-backward " .'")
-                    (cons beg (point)))))))
+       :ibeg (1+ (car bounds))
+       :iend (1- (cdr bounds)))))
   :try-next
   (or (ignore-errors
         (forward-sexp 1)
@@ -1679,9 +2078,9 @@ comments."
   :get-obj
   (bounds-of-thing-at-point 'email)
   :try-next
-  (re-search-forward "[a-z]@[a-z]")
+  (re-search-forward "[a-z0-9!#$%&'*+/=?^_`{|}~-]@[a-z0-9]")
   :try-prev
-  (re-search-backward "[a-z]@[a-z]"))
+  (re-search-backward "[a-z0-9!#$%&'*+/=?^_`{|}~-]@[a-z0-9]"))
 
 (objed-define-object nil url
   :get-obj
@@ -1724,13 +2123,15 @@ comments."
   (or (looking-at "^")
       (looking-back "^ *" (line-beginning-position)))
   :get-obj
-  (objed-make-object :beg (line-beginning-position)
-                     :end (save-excursion
+  (if (eobp)
+      (objed-make-empty-object)
+    (objed-make-object :beg (line-beginning-position)
+                       :end (save-excursion
                             ;; include hidden parts...
-                            (end-of-visible-line)
-                            (if (eobp)
-                                (point)
-                              (1+ (point)))))
+                              (end-of-visible-line)
+                              (if (eobp)
+                                  (point)
+                                (1+ (point))))))
   :try-next
   (skip-chars-forward " \t\r\n")
   :try-prev
@@ -1804,7 +2205,10 @@ non-nil the indentation block can contain empty lines."
                  (goto-char opos))
                (line-end-position))))
     (when (and beg end)
-      (cons beg end))))
+      (save-excursion
+        (goto-char beg)
+        (cons (line-beginning-position)
+               end)))))
 
 
 (objed-define-object nil indent
@@ -2108,7 +2512,15 @@ non-nil the indentation block can contain empty lines."
   :atp (or (looking-at "\\_<")
            (looking-back "\\_>" 1))
   :get-obj
-  (bounds-of-thing-at-point 'symbol)
+  (let ((bounds (bounds-of-thing-at-point 'symbol)))
+    (when bounds
+      (objed-make-object
+       :obounds bounds
+       :ibounds (save-excursion
+                  ;; use the symbol prefix by default
+                  (goto-char (car bounds))
+                  (objed--inner-word-bounds)))))
+
   :try-next
   (objed--next-identifier)
   :try-prev
@@ -2124,7 +2536,8 @@ non-nil the indentation block can contain empty lines."
                       (buffer-substring (car bds) (cdr bds)))))
         (when bds
           (goto-char (cdr bds)))
-        (if (re-search-forward (format "\\_<%s\\_>" sym) nil t)
+        (if (re-search-forward (format "\\_<%s\\_>"
+                                       (regexp-quote sym)) nil t)
             (goto-char (match-beginning 0))
           (goto-char (car bds))
           (when (or (eq real-this-command #'objed-next-identifier)
@@ -2141,7 +2554,8 @@ non-nil the indentation block can contain empty lines."
         (when bds
           (when (looking-back "\\_>" 1)
             (goto-char (car bds)))
-          (if (re-search-backward (format "\\_<%s\\_>" sym) nil t)
+          (if (re-search-backward (format "\\_<%s\\_>"
+                                          (regexp-quote sym)) nil t)
               (goto-char (match-beginning 0))
             (goto-char (car bds))
             (when (or (eq real-this-command #'objed-prev-identifier)
@@ -2225,6 +2639,33 @@ non-nil the indentation block can contain empty lines."
                                (down-list -1)
                                (point)))))))))))
 
+
+(objed-define-object css-mode defun
+  :mode css-mode
+  :atp
+  (looking-at "^[^[:space:]]")
+  :try-next
+  (search-forward "{")
+  :try-prev
+  (search-backward "{")
+  :get-obj
+  (unless (objed--in-comment-p)
+    (let* ((pos (point))
+           (end (and (search-forward "}" nil t) (point)))
+           (beg (and end
+                     (search-backward "{" nil t)
+                     (or (and (re-search-backward "^ *$" nil t)
+                              (1+ (match-end 0)))
+                         (and (re-search-backward "^" nil t)
+                              (line-beginning-position))))))
+      (when (and beg end
+                 (<= beg pos end))
+        (objed-make-object
+         :beg beg
+         :ibeg (search-forward "{")
+         :end end
+         :iend (1- end))))))
+
 (objed-define-object nil tag
   :atp
   (and (derived-mode-p 'sgml-mode)
@@ -2251,11 +2692,17 @@ non-nil the indentation block can contain empty lines."
   :try-prev
   (search-backward ">" nil t))
 
-
+(defvar hl-line-overlay)
 (defun objed--what-face (&optional pos)
   "Return face at POS."
   (let* ((pos (or pos (point)))
-         (face (get-text-property pos 'face)))
+         (ov (car (overlays-at (point) t)))
+         (face (or (and ov
+                        ;; exclude hl line
+                        (not (eq hl-line-overlay ov))
+                        (overlay-get ov  'face))
+                   (get-char-property pos 'read-face-name)
+                   (get-text-property pos 'face))))
      (unless (keywordp (car-safe face)) (list face))))
 
 (defvar objed--last-face nil)
@@ -2323,6 +2770,57 @@ non-nil the indentation block can contain empty lines."
                      (objed--what-face)))
     (forward-char -1)))
 
+(defvar flycheck-mode)
+(defvar flymake-mode)
+(defvar flymake-wrap-around)
+(declare-function flycheck-overlays-at "ext:flycheck")
+(declare-function flycheck-next-error "ext:flycheck")
+(declare-function flycheck-previous-error "ext:flycheck")
+(declare-function flymake--overlays "ext:flymake")
+(declare-function flymake-goto-next-error "ext:flymake")
+(declare-function flymake-goto-prev-error "ext:flymake")
+(defun objed--get-error-bounds ()
+  "Return linter error at point."
+  (cond ((bound-and-true-p flycheck-mode)
+         (let ((ov (car (flycheck-overlays-at (point)))))
+           (when ov
+             (cons (overlay-start ov)
+                   (overlay-end ov)))))
+        (flymake-mode
+         (let ((ov (car (flymake--overlays :beg (point)))))
+           (when ov
+             (run-at-time 0 nil
+                          #'message
+                          (funcall (overlay-get ov 'help-echo)
+                                   (selected-window) ov (point)))
+             (cons (overlay-start ov)
+                   (overlay-end ov)))))))
+
+(defun objed--next-error ()
+  "Goto next linter error."
+  (cond ((bound-and-true-p flycheck-mode)
+         (flycheck-next-error))
+        (flymake-mode
+         (let ((flymake-wrap-around nil))
+           (flymake-goto-next-error 1)))))
+
+(defun objed--previous-error ()
+  "Goto previous linter error."
+  (cond ((bound-and-true-p flycheck-mode)
+         (flycheck-previous-error))
+        (flymake-mode
+         (let ((flymake-wrap-around nil))
+           (flymake-goto-prev-error 1)))))
+
+
+(objed-define-object nil error
+  :get-obj
+  (objed--get-error-bounds)
+  :try-next
+  (objed--next-error)
+  :try-prev
+  (objed--previous-error))
+
 
 (declare-function org-mark-element "ext:org")
 
@@ -2373,7 +2871,21 @@ non-nil the indentation block can contain empty lines."
       (setf (cdr bounds) (point))
       (objed-make-object :obounds bounds :ibounds ibounds))))
 
-
+(declare-function org-table-beginning-of-field "ext:org")
+(declare-function org-table-end-of-field "ext:org")
+(objed-define-object org field
+  :beg (if (looking-back "| ?\\( *\\)" (line-beginning-position))
+           (match-beginning 1)
+         (org-table-beginning-of-field 1)
+         (point))
+  :end (if (looking-at "\\( *\\) ?|")
+           (match-end 1)
+         (org-table-end-of-field 1)
+         (point))
+  :try-next
+  (org-table-end-of-field 1)
+  :try-prev
+  (org-table-beginning-of-field 1))
 
 (defvar comint-prompt-regexp)
 (declare-function comint-next-prompt "ext:comint")

@@ -1,4 +1,4 @@
-h
+v
 ;;;;
 
 (defun check ()
@@ -16,6 +16,7 @@ h
 
 ;; More on same level
 
-|<;; Some text
-;; and more text>
+;; Some text
+|<;; and more text
+>
 
