@@ -27,10 +27,14 @@
 
 ;; * Bytecomp
 
+(require 'cl-lib)
 (require 'subword)
+(require 'face-remap)
 
 ;; info for byte-comp
-(declare-function avy--process "ext:avy")
+(defvar objed-map)
+(defvar objed-object-map)
+(declare-function avy-process "ext:avy")
 (declare-function avy--style-fn "ext:avy")
 (declare-function avy-goto-char "ext:avy")
 (declare-function stripe-buffer-mode "ext:stripe-buffer")
@@ -58,6 +62,9 @@
 (declare-function objed-goto-prev-identifier "ext:objed")
 (declare-function objed-next-identifier "ext:objed")
 (declare-function objed-prev-identifier "ext:objed")
+(declare-function objed-first-identifier "ext:objed")
+(declare-function objed-last-identifier "ext:objed")
+
 
 
 
@@ -446,6 +453,7 @@ defined."
 
 
 (defun objed--define-kpair (map key name)
+  "Use MAP to define KEY for object NAME."
   (let ((cmd (objed--name2func name 'nomode)))
     (define-key map key cmd)))
 
@@ -904,7 +912,7 @@ Start at pos START. Default to forward unless BACK is non-nil."
     (save-excursion
       (cond (posns
              (let ((pos (if (> (length posns) 1)
-                            (avy--process posns (avy--style-fn avy-style))
+                            (avy-process posns (avy--style-fn avy-style))
                           (caar posns))))
                (when (integer-or-marker-p pos)
                  (objed--get back pos))))
@@ -2542,7 +2550,16 @@ non-nil the indentation block can contain empty lines."
           (goto-char (car bds))
           (when (or (eq real-this-command #'objed-next-identifier)
                     (eq real-this-command #'objed-goto-next-identifier))
-            (run-at-time 0 nil (apply-partially #'message "No next identifier"))))))))
+            (objed-first-identifier)
+            (objed--flash-object 'match)))))))
+
+(defun objed--flash-object (face &optional time)
+  "Flash current object using FACE for TIME (defaults to 0.4)."
+  (let ((cookie (face-remap-add-relative
+                 'objed-hl face)))
+    (run-at-time (or time .3) nil
+                 (lambda ()
+                   (face-remap-remove-relative cookie)))))
 
 (defun objed--prev-identifier ()
   "Move to previous identifier."
@@ -2560,7 +2577,8 @@ non-nil the indentation block can contain empty lines."
             (goto-char (car bds))
             (when (or (eq real-this-command #'objed-prev-identifier)
                       (eq real-this-command #'objed-goto-prev-identifier))
-              (run-at-time 0 nil (apply-partially #'message "No previous identifier")))))))))
+              (objed-last-identifier)
+              (objed--flash-object 'match))))))))
 
 
 
@@ -2973,3 +2991,4 @@ non-nil the indentation block can contain empty lines."
 
 (provide 'objed-objects)
 ;;; objed-objects.el ends here
+
